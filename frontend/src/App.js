@@ -6,6 +6,7 @@ import {
   CloudServerOutlined, 
   MonitorOutlined, 
   UserOutlined,
+  KeyOutlined,
   LogoutOutlined,
   SettingOutlined
 } from '@ant-design/icons';
@@ -16,6 +17,7 @@ import BaremetalManagement from './components/BaremetalManagement';
 import VMManagement from './components/VMManagement';
 import Monitoring from './components/Monitoring';
 import UserManagement from './components/UserManagement';
+import SSHKeyManagement from './components/SSHKeyManagement';
 import Login from './components/Login';
 import { authService } from './services/auth';
 
@@ -84,6 +86,11 @@ function App() {
       key: '/monitoring',
       icon: <MonitorOutlined />,
       label: 'Monitoring',
+    },
+    {
+      key: '/ssh-keys',
+      icon: <KeyOutlined />,
+      label: 'SSH Keys',
     },
     ...(user?.role === 'admin' ? [{
       key: '/users',
@@ -177,6 +184,7 @@ function App() {
             <Route path="/baremetals" element={<BaremetalManagement />} />
             <Route path="/vms" element={<VMManagement />} />
             <Route path="/monitoring" element={<Monitoring />} />
+            <Route path="/ssh-keys" element={<SSHKeyManagement />} />
             {user?.role === 'admin' && (
               <Route path="/users" element={<UserManagement />} />
             )}

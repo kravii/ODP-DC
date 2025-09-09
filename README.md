@@ -52,7 +52,8 @@ A comprehensive solution for managing a data center infrastructure on Hetzner ba
 
 ### Prerequisites
 - Docker and Docker Compose
-- Hetzner Cloud API token
+- Pre-provisioned baremetal servers from IT team
+- SSH keys for baremetal access
 - Slack webhook URL (optional)
 - JIRA credentials (optional)
 
@@ -91,9 +92,6 @@ A comprehensive solution for managing a data center infrastructure on Hetzner ba
 MYSQL_PASSWORD=your_password
 MYSQL_ROOT_PASSWORD=your_root_password
 
-# Hetzner API
-HETZNER_API_TOKEN=your_hetzner_token
-
 # JWT
 JWT_SECRET_KEY=your_jwt_secret
 
@@ -110,15 +108,22 @@ JIRA_API_TOKEN=your_jira_token
 
 ### Adding Baremetal Servers
 
-1. Access the dashboard at http://localhost:3000
-2. Navigate to "Baremetal Management"
-3. Click "Add Server" and provide:
-   - Server name/hostname
-   - IP address
-   - Operating System (RHEL 8, Rocky Linux 9, Ubuntu 20/22)
-   - Resource specifications (CPU, Memory)
-   - Storage mount points (multiple mounts supported)
-4. The server will be added to the resource pool automatically
+1. **First, add SSH keys** (if not already done):
+   - Go to "SSH Keys" in the sidebar
+   - Click "Add SSH Key"
+   - Upload or paste your SSH public key
+   - Set as default if needed
+
+2. **Add baremetal server**:
+   - Go to "Baremetal Management"
+   - Click "Add Server" and provide:
+     - Server name/hostname (provided by IT team)
+     - IP address (provided by IT team)
+     - Operating System (RHEL 8, Rocky Linux 9, Ubuntu 20/22)
+     - Resource specifications (CPU, Memory)
+     - Storage mount points (multiple mounts supported)
+     - SSH access configuration (select SSH key, username, port)
+3. The server will be added to the resource pool automatically
 
 ### Provisioning VMs
 

@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.core.security import get_current_active_user, require_admin
 from app.models.user import User
 from app.models.baremetal import Baremetal, BaremetalStorageMount
+from app.models.ssh import BaremetalSSHAccess
 from app.models.monitoring import ResourcePool
 from app.schemas.baremetal import BaremetalCreate, BaremetalResponse, BaremetalUpdate
 from app.tasks.baremetal_tasks import update_resource_pool
@@ -64,6 +65,16 @@ async def create_baremetal(
             iops=mount.iops
         )
         db.add(db_mount)
+    
+    # Create SSH access if provided
+    if baremetal.ssh_access:
+        db_ssh_access = BaremetalSSHAccess(
+            baremetal_id=db_baremetal.id,
+            ssh_key_id=baremetal.ssh_access.ssh_key_id,
+            username=baremetal.ssh_access.username,
+            port=baremetal.ssh_access.port
+        )
+        db.add(db_ssh_access)
     
     db.commit()
     
