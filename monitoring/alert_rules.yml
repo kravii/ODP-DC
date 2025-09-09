@@ -1,0 +1,74 @@
+groups:
+  - name: datacenter.rules
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is above 80% for more than 5 minutes on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is above 85% for more than 5 minutes on {{ $labels.instance }}"
+
+      - alert: HighDiskUsage
+        expr: 100 - ((node_filesystem_avail_bytes * 100) / node_filesystem_size_bytes) > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High disk usage detected"
+          description: "Disk usage is above 90% for more than 5 minutes on {{ $labels.instance }}"
+
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service is down"
+          description: "{{ $labels.job }} service is down on {{ $labels.instance }}"
+
+      - alert: BaremetalServerDown
+        expr: up{job="baremetal-servers"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Baremetal server is down"
+          description: "Baremetal server {{ $labels.instance }} is not responding"
+
+      - alert: VMServerDown
+        expr: up{job="vm-monitoring"} == 0
+        for: 2m
+        labels:
+          severity: high
+        annotations:
+          summary: "VM server is down"
+          description: "VM server {{ $labels.instance }} is not responding"
+
+      - alert: HighNetworkTraffic
+        expr: rate(node_network_receive_bytes_total[5m]) > 100000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High network traffic detected"
+          description: "Network traffic is unusually high on {{ $labels.instance }}"
+
+      - alert: LowDiskSpace
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space is below 10% on {{ $labels.instance }}"
