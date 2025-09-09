@@ -71,4 +71,13 @@ export const apiService = {
     update: (id, data) => api.put(`/api/users/${id}`, data),
     delete: (id) => api.delete(`/api/users/${id}`),
   },
+
+  // SSH Key endpoints
+  ssh: {
+    getAll: () => api.get('/api/ssh'),
+    getById: (id) => api.get(`/api/ssh/${id}`),
+    create: (data) => api.post('/api/ssh', data),
+    update: (id, data) => api.put(`/api/ssh/${id}`, data),
+    delete: (id) => api.delete(`/api/ssh/${id}`),
+  },
 };

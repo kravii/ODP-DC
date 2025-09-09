@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 
 from app.database import engine, Base
-from app.routers import auth, baremetals, vms, monitoring, users
+from app.routers import auth, baremetals, vms, monitoring, users, ssh
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.celery_app import celery_app
@@ -42,6 +42,7 @@ security = HTTPBearer()
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
+app.include_router(ssh.router, prefix="/api/ssh", tags=["SSH Keys"])
 app.include_router(baremetals.router, prefix="/api/baremetals", tags=["Baremetals"])
 app.include_router(vms.router, prefix="/api/vms", tags=["VMs"])
 app.include_router(monitoring.router, prefix="/api/monitoring", tags=["Monitoring"])

@@ -20,6 +20,7 @@ class Baremetal(Base):
     # Relationships
     storage_mounts = relationship("BaremetalStorageMount", back_populates="baremetal", cascade="all, delete-orphan")
     vms = relationship("VM", back_populates="baremetal")
+    ssh_access = relationship("BaremetalSSHAccess", back_populates="baremetal", cascade="all, delete-orphan")
 
 class BaremetalStorageMount(Base):
     __tablename__ = "baremetal_storage_mounts"

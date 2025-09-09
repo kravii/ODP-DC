@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # Hetzner API
-    HETZNER_API_TOKEN: str = ""
+    # Baremetal Configuration
+    # No external API required - baremetals are manually provisioned
     
     # Slack Integration
     SLACK_WEBHOOK_URL: str = ""

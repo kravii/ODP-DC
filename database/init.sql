@@ -149,6 +149,19 @@ CREATE TABLE ssh_keys (
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
 
+-- Baremetal SSH access table
+CREATE TABLE baremetal_ssh_access (
+    id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    baremetal_id CHAR(36) NOT NULL,
+    ssh_key_id CHAR(36) NOT NULL,
+    username VARCHAR(50) NOT NULL,
+    port INT DEFAULT 22,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (baremetal_id) REFERENCES baremetals(id) ON DELETE CASCADE,
+    FOREIGN KEY (ssh_key_id) REFERENCES ssh_keys(id) ON DELETE CASCADE
+);
+
 -- Insert default VM images
 INSERT INTO vm_images (name, os_type, version, image_url, min_cpu, min_memory, min_storage) VALUES
 ('CentOS 7', 'centos', '7', 'https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud.qcow2', 1, 1024, 20),

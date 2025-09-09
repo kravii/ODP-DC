@@ -34,6 +34,7 @@ const { Option } = Select;
 const BaremetalManagement = () => {
   const [baremetals, setBaremetals] = useState([]);
   const [resourcePool, setResourcePool] = useState(null);
+  const [sshKeys, setSshKeys] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingBaremetal, setEditingBaremetal] = useState(null);
@@ -42,6 +43,7 @@ const BaremetalManagement = () => {
   useEffect(() => {
     fetchBaremetals();
     fetchResourcePool();
+    fetchSSHKeys();
   }, []);
 
   const fetchBaremetals = async () => {
@@ -62,6 +64,15 @@ const BaremetalManagement = () => {
       setResourcePool(response.data);
     } catch (error) {
       console.error('Failed to fetch resource pool:', error);
+    }
+  };
+
+  const fetchSSHKeys = async () => {
+    try {
+      const response = await apiService.ssh.getAll();
+      setSshKeys(response.data);
+    } catch (error) {
+      console.error('Failed to fetch SSH keys:', error);
     }
   };
 
@@ -457,6 +468,44 @@ const BaremetalManagement = () => {
               )}
             </Form.List>
           </Form.Item>
+
+          <Divider>SSH Access Configuration</Divider>
+
+          <Form.Item
+            name={['ssh_access', 'ssh_key_id']}
+            label="SSH Key"
+            rules={[{ required: true, message: 'Please select an SSH key!' }]}
+          >
+            <Select placeholder="Select SSH key">
+              {sshKeys.map(key => (
+                <Option key={key.id} value={key.id}>
+                  {key.name} {key.is_default && '(Default)'}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name={['ssh_access', 'username']}
+                label="SSH Username"
+                rules={[{ required: true, message: 'Please input SSH username!' }]}
+                initialValue="root"
+              >
+                <Input placeholder="root" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name={['ssh_access', 'port']}
+                label="SSH Port"
+                initialValue={22}
+              >
+                <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
 
           {editingBaremetal && (
             <Form.Item

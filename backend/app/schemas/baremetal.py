@@ -7,6 +7,11 @@ class BaremetalStorageMountCreate(BaseModel):
     storage_type: str = "standard"
     iops: int = 0
 
+class BaremetalSSHAccessCreate(BaseModel):
+    ssh_key_id: str
+    username: str
+    port: int = 22
+
 class BaremetalCreate(BaseModel):
     hostname: str
     ip_address: IPvAnyAddress
@@ -14,6 +19,7 @@ class BaremetalCreate(BaseModel):
     cpu_cores: int
     memory_gb: int
     storage_mounts: List[BaremetalStorageMountCreate] = []
+    ssh_access: Optional[BaremetalSSHAccessCreate] = None
 
 class BaremetalUpdate(BaseModel):
     hostname: Optional[str] = None
@@ -34,6 +40,17 @@ class BaremetalStorageMountResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class BaremetalSSHAccessResponse(BaseModel):
+    id: str
+    username: str
+    port: int
+    is_active: bool
+    ssh_key_name: str
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
 class BaremetalResponse(BaseModel):
     id: str
     hostname: str
@@ -46,6 +63,7 @@ class BaremetalResponse(BaseModel):
     created_at: str
     updated_at: str
     storage_mounts: List[BaremetalStorageMountResponse] = []
+    ssh_access: Optional[BaremetalSSHAccessResponse] = None
 
     class Config:
         from_attributes = True
