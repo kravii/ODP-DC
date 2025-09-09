@@ -15,7 +15,8 @@ import {
   Col, 
   Statistic,
   Tag,
-  Tooltip
+  Tooltip,
+  Divider
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -75,11 +76,11 @@ const BaremetalManagement = () => {
     form.setFieldsValue({
       hostname: record.hostname,
       ip_address: record.ip_address,
+      os_type: record.os_type,
       cpu_cores: record.cpu_cores,
       memory_gb: record.memory_gb,
-      storage_gb: record.storage_gb,
-      iops: record.iops,
       status: record.status,
+      storage_mounts: record.storage_mounts || [],
     });
     setModalVisible(true);
   };
@@ -145,6 +146,21 @@ const BaremetalManagement = () => {
       key: 'ip_address',
     },
     {
+      title: 'OS Type',
+      dataIndex: 'os_type',
+      key: 'os_type',
+      render: (osType) => (
+        <Tag color="blue">{osType.toUpperCase()}</Tag>
+      ),
+      filters: [
+        { text: 'RHEL 8', value: 'rhel8' },
+        { text: 'Rocky Linux 9', value: 'rocky9' },
+        { text: 'Ubuntu 20', value: 'ubuntu20' },
+        { text: 'Ubuntu 22', value: 'ubuntu22' },
+      ],
+      onFilter: (value, record) => record.os_type === value,
+    },
+    {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
@@ -174,16 +190,31 @@ const BaremetalManagement = () => {
       sorter: (a, b) => a.memory_gb - b.memory_gb,
     },
     {
-      title: 'Storage (GB)',
-      dataIndex: 'storage_gb',
-      key: 'storage_gb',
-      sorter: (a, b) => a.storage_gb - b.storage_gb,
+      title: 'Storage Mounts',
+      dataIndex: 'storage_mounts',
+      key: 'storage_mounts',
+      render: (mounts) => (
+        <div>
+          {mounts?.map((mount, index) => (
+            <div key={index} style={{ fontSize: '12px' }}>
+              {mount.mount_point}: {mount.storage_gb}GB ({mount.storage_type})
+            </div>
+          ))}
+        </div>
+      ),
     },
     {
-      title: 'IOPS',
-      dataIndex: 'iops',
-      key: 'iops',
-      sorter: (a, b) => a.iops - b.iops,
+      title: 'Total Storage (GB)',
+      key: 'total_storage',
+      render: (_, record) => {
+        const total = record.storage_mounts?.reduce((sum, mount) => sum + mount.storage_gb, 0) || 0;
+        return total;
+      },
+      sorter: (a, b) => {
+        const aTotal = a.storage_mounts?.reduce((sum, mount) => sum + mount.storage_gb, 0) || 0;
+        const bTotal = b.storage_mounts?.reduce((sum, mount) => sum + mount.storage_gb, 0) || 0;
+        return aTotal - bTotal;
+      },
     },
     {
       title: 'Last Health Check',
@@ -309,23 +340,41 @@ const BaremetalManagement = () => {
           layout="vertical"
           onFinish={handleSubmit}
         >
-          <Form.Item
-            name="hostname"
-            label="Hostname"
-            rules={[{ required: true, message: 'Please input hostname!' }]}
-          >
-            <Input placeholder="server-01" />
-          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="hostname"
+                label="Hostname"
+                rules={[{ required: true, message: 'Please input hostname!' }]}
+              >
+                <Input placeholder="server-01" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="ip_address"
+                label="IP Address"
+                rules={[
+                  { required: true, message: 'Please input IP address!' },
+                  { pattern: /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/, message: 'Please input valid IP address!' }
+                ]}
+              >
+                <Input placeholder="192.168.1.100" />
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Form.Item
-            name="ip_address"
-            label="IP Address"
-            rules={[
-              { required: true, message: 'Please input IP address!' },
-              { pattern: /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/, message: 'Please input valid IP address!' }
-            ]}
+            name="os_type"
+            label="Operating System"
+            rules={[{ required: true, message: 'Please select OS type!' }]}
           >
-            <Input placeholder="192.168.1.100" />
+            <Select placeholder="Select OS type">
+              <Option value="rhel8">RHEL 8</Option>
+              <Option value="rocky9">Rocky Linux 9</Option>
+              <Option value="ubuntu20">Ubuntu 20.04</Option>
+              <Option value="ubuntu22">Ubuntu 22.04</Option>
+            </Select>
           </Form.Item>
 
           <Row gutter={16}>
@@ -349,25 +398,65 @@ const BaremetalManagement = () => {
             </Col>
           </Row>
 
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="storage_gb"
-                label="Storage (GB)"
-                rules={[{ required: true, message: 'Please input storage!' }]}
-              >
-                <InputNumber min={1} max={10000} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="iops"
-                label="IOPS"
-              >
-                <InputNumber min={0} max={100000} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Divider>Storage Configuration</Divider>
+
+          <Form.Item
+            name="storage_mounts"
+            label="Storage Mounts"
+            initialValue={[{ mount_point: '/', storage_gb: 100, storage_type: 'standard', iops: 0 }]}
+          >
+            <Form.List name="storage_mounts">
+              {(fields, { add, remove }) => (
+                <>
+                  {fields.map(({ key, name, ...restField }) => (
+                    <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'mount_point']}
+                        rules={[{ required: true, message: 'Missing mount point' }]}
+                        style={{ width: 120 }}
+                      >
+                        <Input placeholder="Mount point" />
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'storage_gb']}
+                        rules={[{ required: true, message: 'Missing storage size' }]}
+                        style={{ width: 100 }}
+                      >
+                        <InputNumber placeholder="Size (GB)" min={1} max={10000} />
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'storage_type']}
+                        rules={[{ required: true, message: 'Missing storage type' }]}
+                        style={{ width: 100 }}
+                      >
+                        <Select placeholder="Type">
+                          <Option value="standard">Standard</Option>
+                          <Option value="ssd">SSD</Option>
+                          <Option value="nvme">NVMe</Option>
+                        </Select>
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'iops']}
+                        style={{ width: 80 }}
+                      >
+                        <InputNumber placeholder="IOPS" min={0} max={100000} />
+                      </Form.Item>
+                      <Button onClick={() => remove(name)}>Remove</Button>
+                    </Space>
+                  ))}
+                  <Form.Item>
+                    <Button type="dashed" onClick={() => add()} block>
+                      Add Storage Mount
+                    </Button>
+                  </Form.Item>
+                </>
+              )}
+            </Form.List>
+          </Form.Item>
 
           {editingBaremetal && (
             <Form.Item

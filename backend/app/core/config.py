@@ -4,7 +4,7 @@ import os
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "postgresql://admin:admin123@localhost:5432/datacenter"
+    DATABASE_URL: str = "mysql+pymysql://admin:admin123@localhost:3306/datacenter"
     
     # JWT
     JWT_SECRET_KEY: str = "your-secret-key"

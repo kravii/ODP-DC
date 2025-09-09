@@ -6,7 +6,7 @@ import ipaddress
 from app.core.database import get_db
 from app.core.security import get_current_active_user, require_admin
 from app.models.user import User
-from app.models.baremetal import Baremetal
+from app.models.baremetal import Baremetal, BaremetalStorageMount
 from app.models.monitoring import ResourcePool
 from app.schemas.baremetal import BaremetalCreate, BaremetalResponse, BaremetalUpdate
 from app.tasks.baremetal_tasks import update_resource_pool
@@ -46,14 +46,26 @@ async def create_baremetal(
     db_baremetal = Baremetal(
         hostname=baremetal.hostname,
         ip_address=baremetal.ip_address,
+        os_type=baremetal.os_type,
         cpu_cores=baremetal.cpu_cores,
-        memory_gb=baremetal.memory_gb,
-        storage_gb=baremetal.storage_gb,
-        iops=baremetal.iops
+        memory_gb=baremetal.memory_gb
     )
     db.add(db_baremetal)
     db.commit()
     db.refresh(db_baremetal)
+    
+    # Create storage mounts
+    for mount in baremetal.storage_mounts:
+        db_mount = BaremetalStorageMount(
+            baremetal_id=db_baremetal.id,
+            mount_point=mount.mount_point,
+            storage_gb=mount.storage_gb,
+            storage_type=mount.storage_type,
+            iops=mount.iops
+        )
+        db.add(db_mount)
+    
+    db.commit()
     
     # Update resource pool
     update_resource_pool.delay()
@@ -104,14 +116,12 @@ async def update_baremetal(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid IP address format"
             )
+    if baremetal_update.os_type is not None:
+        baremetal.os_type = baremetal_update.os_type
     if baremetal_update.cpu_cores is not None:
         baremetal.cpu_cores = baremetal_update.cpu_cores
     if baremetal_update.memory_gb is not None:
         baremetal.memory_gb = baremetal_update.memory_gb
-    if baremetal_update.storage_gb is not None:
-        baremetal.storage_gb = baremetal_update.storage_gb
-    if baremetal_update.iops is not None:
-        baremetal.iops = baremetal_update.iops
     if baremetal_update.status is not None:
         baremetal.status = baremetal_update.status
     

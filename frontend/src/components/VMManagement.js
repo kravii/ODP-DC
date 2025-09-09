@@ -370,7 +370,13 @@ const VMManagement = () => {
                 label="Operating System"
                 rules={[{ required: true, message: 'Please select an OS image!' }]}
               >
-                <Select placeholder="Select OS image">
+                <Select 
+                  placeholder="Select OS image"
+                  showSearch
+                  filterOption={(input, option) =>
+                    option.children.toLowerCase().indexOf(input.toLowerCase()) >= 0
+                  }
+                >
                   {images.map(image => (
                     <Option key={image.id} value={image.id}>
                       {image.name} ({image.os_type} {image.version})

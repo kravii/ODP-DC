@@ -64,14 +64,16 @@ A comprehensive solution for managing a data center infrastructure on Hetzner ba
    cd datacenter-management
    ```
 
-2. **Configure environment variables**
+2. **Run the setup script**
+   ```bash
+   chmod +x scripts/setup.sh
+   ./scripts/setup.sh
+   ```
+
+3. **Or configure manually**
    ```bash
    cp .env.example .env
    # Edit .env with your configuration
-   ```
-
-3. **Start the services**
-   ```bash
    docker-compose up -d
    ```
 
@@ -79,15 +81,15 @@ A comprehensive solution for managing a data center infrastructure on Hetzner ba
    - Frontend: http://localhost:3000
    - API Documentation: http://localhost:8000/docs
    - Monitoring: http://localhost:3001
+   - MySQL Database: localhost:3306
 
 ### Configuration
 
 #### Environment Variables
 ```bash
 # Database
-POSTGRES_DB=datacenter
-POSTGRES_USER=admin
-POSTGRES_PASSWORD=your_password
+MYSQL_PASSWORD=your_password
+MYSQL_ROOT_PASSWORD=your_root_password
 
 # Hetzner API
 HETZNER_API_TOKEN=your_hetzner_token
@@ -113,7 +115,9 @@ JIRA_API_TOKEN=your_jira_token
 3. Click "Add Server" and provide:
    - Server name/hostname
    - IP address
-   - Resource specifications (CPU, Memory, Storage)
+   - Operating System (RHEL 8, Rocky Linux 9, Ubuntu 20/22)
+   - Resource specifications (CPU, Memory)
+   - Storage mount points (multiple mounts supported)
 4. The server will be added to the resource pool automatically
 
 ### Provisioning VMs
@@ -122,7 +126,7 @@ JIRA_API_TOKEN=your_jira_token
 2. Click "Launch VM"
 3. Configure:
    - VM hostname
-   - Operating system image
+   - Operating system image (pre-configured dropdown)
    - CPU and memory allocation
    - Storage configuration with mount points
 4. Click "Launch" to provision the VM

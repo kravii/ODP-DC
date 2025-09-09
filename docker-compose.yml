@@ -3,16 +3,18 @@ version: '3.8'
 services:
   # Database
   db:
-    image: postgres:15
+    image: mysql:8.0
     environment:
-      POSTGRES_DB: datacenter
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin123}
+      MYSQL_DATABASE: datacenter
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-admin123}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-      - "5432:5432"
+      - "3306:3306"
+    command: --default-authentication-plugin=mysql_native_password
     networks:
       - datacenter-network
 
@@ -20,7 +22,7 @@ services:
   api:
     build: ./backend
     environment:
-      - DATABASE_URL=postgresql://admin:${POSTGRES_PASSWORD:-admin123}@db:5432/datacenter
+      - DATABASE_URL=mysql://admin:${MYSQL_PASSWORD:-admin123}@db:3306/datacenter
       - HETZNER_API_TOKEN=${HETZNER_API_TOKEN}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key}
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
@@ -115,7 +117,7 @@ services:
     build: ./backend
     command: celery -A app.celery worker --loglevel=info
     environment:
-      - DATABASE_URL=postgresql://admin:${POSTGRES_PASSWORD:-admin123}@db:5432/datacenter
+      - DATABASE_URL=mysql://admin:${MYSQL_PASSWORD:-admin123}@db:3306/datacenter
       - REDIS_URL=redis://redis:6379/0
       - HETZNER_API_TOKEN=${HETZNER_API_TOKEN}
     depends_on:
@@ -132,7 +134,7 @@ services:
     build: ./backend
     command: celery -A app.celery beat --loglevel=info
     environment:
-      - DATABASE_URL=postgresql://admin:${POSTGRES_PASSWORD:-admin123}@db:5432/datacenter
+      - DATABASE_URL=mysql://admin:${MYSQL_PASSWORD:-admin123}@db:3306/datacenter
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - db
@@ -143,7 +145,7 @@ services:
       - datacenter-network
 
 volumes:
-  postgres_data:
+  mysql_data:
   prometheus_data:
   grafana_data:
   redis_data:

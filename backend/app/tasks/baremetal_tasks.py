@@ -22,8 +22,14 @@ def update_resource_pool():
         # Calculate total resources
         total_cpu = sum(bm.cpu_cores for bm in baremetals)
         total_memory = sum(bm.memory_gb for bm in baremetals)
-        total_storage = sum(bm.storage_gb for bm in baremetals)
-        total_iops = sum(bm.iops for bm in baremetals)
+        
+        # Calculate storage and IOPS from all storage mounts
+        total_storage = 0
+        total_iops = 0
+        for bm in baremetals:
+            for mount in bm.storage_mounts:
+                total_storage += mount.storage_gb
+                total_iops += mount.iops
         
         # Calculate used resources (simplified - in real implementation, 
         # you'd query VM usage from the database)

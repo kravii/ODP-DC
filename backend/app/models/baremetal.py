@@ -1,23 +1,36 @@
-from sqlalchemy import Column, String, Integer, DateTime, func, CheckConstraint
-from sqlalchemy.dialects.postgresql import UUID, INET
-import uuid
+from sqlalchemy import Column, String, Integer, DateTime, func, Enum, ForeignKey
+from sqlalchemy.orm import relationship
 from app.core.database import Base
+from app.core.utils import generate_uuid
 
 class Baremetal(Base):
     __tablename__ = "baremetals"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(String(36), primary_key=True, default=generate_uuid)
     hostname = Column(String(100), unique=True, nullable=False)
-    ip_address = Column(INET, nullable=False)
+    ip_address = Column(String(45), nullable=False)
+    os_type = Column(Enum('rhel8', 'rocky9', 'ubuntu20', 'ubuntu22'), nullable=False)
     cpu_cores = Column(Integer, nullable=False)
     memory_gb = Column(Integer, nullable=False)
-    storage_gb = Column(Integer, nullable=False)
-    iops = Column(Integer, default=0)
-    status = Column(String(20), default='active')
-    last_health_check = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    status = Column(Enum('active', 'inactive', 'maintenance', 'failed'), default='active')
+    last_health_check = Column(DateTime)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (
-        CheckConstraint("status IN ('active', 'inactive', 'maintenance', 'failed')", name='check_status'),
-    )
+    # Relationships
+    storage_mounts = relationship("BaremetalStorageMount", back_populates="baremetal", cascade="all, delete-orphan")
+    vms = relationship("VM", back_populates="baremetal")
+
+class BaremetalStorageMount(Base):
+    __tablename__ = "baremetal_storage_mounts"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    baremetal_id = Column(String(36), ForeignKey("baremetals.id", ondelete="CASCADE"), nullable=False)
+    mount_point = Column(String(255), nullable=False)
+    storage_gb = Column(Integer, nullable=False)
+    storage_type = Column(Enum('standard', 'ssd', 'nvme'), default='standard')
+    iops = Column(Integer, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+
+    # Relationships
+    baremetal = relationship("Baremetal", back_populates="storage_mounts")
