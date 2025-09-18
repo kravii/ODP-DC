@@ -1,0 +1,495 @@
+---
+# Enhanced Shared Storage Configuration for Kubernetes
+# Uses 1.8TB RAID storage mounted at / for both K8s and VM provisioning
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shared-storage-system
+  labels:
+    name: shared-storage-system
+    purpose: storage-management
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shared-storage-config
+  namespace: shared-storage-system
+data:
+  storage-info: |
+    # Enhanced Shared Storage Configuration
+    # RAID Storage: 1.8TB mounted at /
+    # Used for Kubernetes PVs and VM storage
+    
+    # Storage Allocation:
+    # - Kubernetes PVs: 500GB
+    # - VM Storage: 1TB
+    # - Monitoring: 200GB
+    # - Backups: 80GB
+    # - System Reserve: 20GB
+    
+    # Directory Structure:
+    # /shared-storage/
+    # ├── k8s-pv/          # Kubernetes Persistent Volumes
+    # ├── vm-storage/      # VM Storage
+    # ├── monitoring/      # Monitoring data
+    # ├── backups/         # Backup storage
+    # └── logs/            # Log storage
+  storage-limits: |
+    vm_storage: 1000
+    k8s_storage: 500
+    monitoring: 200
+    backups: 80
+    logs: 20
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-enhanced-shared-storage
+  namespace: shared-storage-system
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: setup-storage
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Create shared storage directories with proper structure
+          mkdir -p /shared-storage/k8s-pv/{databases,applications,logs}
+          mkdir -p /shared-storage/vm-storage/{images,templates,instances,snapshots}
+          mkdir -p /shared-storage/monitoring/{prometheus,grafana,alertmanager}
+          mkdir -p /shared-storage/backups/{system,vm-snapshots,k8s-backups}
+          mkdir -p /shared-storage/logs/{application,system,audit}
+          
+          # Set permissions
+          chmod -R 755 /shared-storage
+          
+          # Set ownership for Kubernetes (user/group 1000)
+          chown -R 1000:1000 /shared-storage/k8s-pv
+          chown -R 1000:1000 /shared-storage/monitoring
+          
+          # Set ownership for VM storage (user/group 1001)
+          chown -R 1001:1001 /shared-storage/vm-storage
+          
+          # Set ownership for system directories
+          chown -R root:root /shared-storage/backups
+          chown -R root:root /shared-storage/logs
+          
+          # Create storage configuration
+          cat > /shared-storage/storage-config.yaml << 'EOF'
+          storage:
+            root_path: "/shared-storage"
+            total_size_gb: 1800
+            
+            allocations:
+              vm_storage:
+                path: "/shared-storage/vm-storage"
+                size_gb: 1000
+                owner: "1001:1001"
+              
+              k8s_storage:
+                path: "/shared-storage/k8s-pv"
+                size_gb: 500
+                owner: "1000:1000"
+              
+              monitoring:
+                path: "/shared-storage/monitoring"
+                size_gb: 200
+                owner: "1000:1000"
+              
+              backups:
+                path: "/shared-storage/backups"
+                size_gb: 80
+                owner: "root:root"
+              
+              logs:
+                path: "/shared-storage/logs"
+                size_gb: 20
+                owner: "root:root"
+          EOF
+          
+          echo "Enhanced shared storage setup completed"
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /shared-storage
+      volumes:
+      - name: shared-storage
+        hostPath:
+          path: /
+---
+# Enhanced Local Path Provisioner for Shared Storage
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: enhanced-local-path-provisioner-service-account
+  namespace: shared-storage-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: enhanced-local-path-provisioner-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "persistentvolumes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "update", "patch"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: enhanced-local-path-provisioner-bind
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: enhanced-local-path-provisioner-role
+subjects:
+- kind: ServiceAccount
+  name: enhanced-local-path-provisioner-service-account
+  namespace: shared-storage-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enhanced-local-path-provisioner
+  namespace: shared-storage-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: enhanced-local-path-provisioner
+  template:
+    metadata:
+      labels:
+        app: enhanced-local-path-provisioner
+    spec:
+      serviceAccountName: enhanced-local-path-provisioner-service-account
+      containers:
+      - name: enhanced-local-path-provisioner
+        image: rancher/local-path-provisioner:v0.0.24
+        imagePullPolicy: IfNotPresent
+        command:
+        - local-path-provisioner
+        - start
+        - --config
+        - /etc/config/config.json
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/config/
+        - name: storage-path
+          mountPath: /opt/local-path-provisioner
+        - name: shared-storage
+          mountPath: /shared-storage
+      volumes:
+      - name: config-volume
+        configMap:
+          name: enhanced-local-path-config
+      - name: storage-path
+        hostPath:
+          path: /opt/local-path-provisioner
+      - name: shared-storage
+        hostPath:
+          path: /
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: enhanced-local-path-config
+  namespace: shared-storage-system
+data:
+  config.json: |
+    {
+      "nodePathMap":[
+      {
+        "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
+        "paths": ["/shared-storage/k8s-pv"]
+      }
+      ]
+    }
+  setup: |
+    #!/bin/sh
+    while getopts "m:s:p:" opt
+    do
+        case $opt in
+            p)
+                absolutePath=$OPTARG
+                ;;
+            s)
+                sizeInBytes=$OPTARG
+                ;;
+            m)
+                volMode=$OPTARG
+                ;;
+        esac
+    done
+    
+    if [ -z "$absolutePath" ]; then
+        echo "No absolute path"
+        exit 1
+    fi
+    
+    mkdir -p "$absolutePath"
+    if [ $? -ne 0 ]; then
+        echo "Failed to create $absolutePath"
+        exit 1
+    fi
+    
+    chmod 0777 "$absolutePath"
+    if [ $? -ne 0 ]; then
+        echo "Failed to chmod $absolutePath"
+        exit 1
+    fi
+    
+    echo "$absolutePath"
+  teardown: |
+    #!/bin/sh
+    while getopts "m:s:p:" opt
+    do
+        case $opt in
+            p)
+                absolutePath=$OPTARG
+                ;;
+            s)
+                sizeInBytes=$OPTARG
+                ;;
+            m)
+                volMode=$OPTARG
+                ;;
+        esac
+    done
+    
+    if [ -z "$absolutePath" ]; then
+        echo "No absolute path"
+        exit 1
+    fi
+    
+    rm -rf "$absolutePath"
+    if [ $? -ne 0 ]; then
+        echo "Failed to remove $absolutePath"
+        exit 1
+    fi
+    
+    echo "$absolutePath"
+---
+# Enhanced Storage Classes
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: shared-storage-fast
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowedTopologies:
+- matchLabelExpressions:
+  - key: kubernetes.io/hostname
+    values: ["*"]
+parameters:
+  path: "/shared-storage/k8s-pv"
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: shared-storage-slow
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowedTopologies:
+- matchLabelExpressions:
+  - key: kubernetes.io/hostname
+    values: ["*"]
+parameters:
+  path: "/shared-storage/k8s-pv"
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: shared-storage-monitoring
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowedTopologies:
+- matchLabelExpressions:
+  - key: kubernetes.io/hostname
+    values: ["*"]
+parameters:
+  path: "/shared-storage/monitoring"
+---
+# Storage Monitoring DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: storage-monitor
+  namespace: shared-storage-system
+spec:
+  selector:
+    matchLabels:
+      app: storage-monitor
+  template:
+    metadata:
+      labels:
+        app: storage-monitor
+    spec:
+      containers:
+      - name: storage-monitor
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            # Get storage usage
+            echo "=== Storage Usage Report $(date) ==="
+            df -h /shared-storage
+            echo ""
+            echo "=== Directory Usage ==="
+            du -sh /shared-storage/*
+            echo ""
+            echo "=== Storage Health Check ==="
+            
+            # Check VM storage
+            vm_usage=$(du -s /shared-storage/vm-storage 2>/dev/null | awk '{print $1}')
+            vm_usage_gb=$((vm_usage / 1024 / 1024))
+            if [ $vm_usage_gb -gt 900 ]; then
+              echo "WARNING: VM storage usage is ${vm_usage_gb}GB (limit: 1000GB)"
+            fi
+            
+            # Check K8s storage
+            k8s_usage=$(du -s /shared-storage/k8s-pv 2>/dev/null | awk '{print $1}')
+            k8s_usage_gb=$((k8s_usage / 1024 / 1024))
+            if [ $k8s_usage_gb -gt 450 ]; then
+              echo "WARNING: K8s storage usage is ${k8s_usage_gb}GB (limit: 500GB)"
+            fi
+            
+            # Check monitoring storage
+            monitoring_usage=$(du -s /shared-storage/monitoring 2>/dev/null | awk '{print $1}')
+            monitoring_usage_gb=$((monitoring_usage / 1024 / 1024))
+            if [ $monitoring_usage_gb -gt 180 ]; then
+              echo "WARNING: Monitoring storage usage is ${monitoring_usage_gb}GB (limit: 200GB)"
+            fi
+            
+            echo "Storage health check completed"
+            echo "================================"
+            sleep 300  # Check every 5 minutes
+          done
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /shared-storage
+      volumes:
+      - name: shared-storage
+        hostPath:
+          path: /
+---
+# Storage Cleanup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: storage-cleanup
+  namespace: shared-storage-system
+spec:
+  schedule: "0 2 * * *"  # Run daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: cleanup
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting storage cleanup..."
+              
+              # Clean up old backup files (older than 30 days)
+              find /shared-storage/backups -type f -mtime +30 -delete 2>/dev/null || true
+              echo "Cleaned up old backup files"
+              
+              # Clean up old log files (older than 7 days)
+              find /shared-storage/logs -type f -mtime +7 -delete 2>/dev/null || true
+              echo "Cleaned up old log files"
+              
+              # Clean up old VM snapshots (older than 90 days)
+              find /shared-storage/vm-storage/snapshots -type f -mtime +90 -delete 2>/dev/null || true
+              echo "Cleaned up old VM snapshots"
+              
+              # Clean up temporary files
+              find /shared-storage -name "*.tmp" -delete 2>/dev/null || true
+              find /shared-storage -name "*.temp" -delete 2>/dev/null || true
+              echo "Cleaned up temporary files"
+              
+              echo "Storage cleanup completed"
+            volumeMounts:
+            - name: shared-storage
+              mountPath: /shared-storage
+          volumes:
+          - name: shared-storage
+            hostPath:
+              path: /
+          restartPolicy: OnFailure
+---
+# Example Persistent Volume Claims
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: database-pvc
+  namespace: shared-storage-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: shared-storage-fast
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: application-pvc
+  namespace: shared-storage-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: shared-storage-fast
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: monitoring-pvc
+  namespace: shared-storage-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: shared-storage-monitoring
+  resources:
+    requests:
+      storage: 50Gi

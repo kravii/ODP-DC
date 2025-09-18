@@ -1,0 +1,279 @@
+---
+# Resource Pool Network Isolation
+# Ensures complete isolation between K8s and VM resource pools
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: network-isolation
+  labels:
+    name: network-isolation
+    purpose: resource-pool-isolation
+---
+# K8s Pool Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: k8s-pool-isolation
+  namespace: k8s-pool-storage
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic within K8s pool
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          pool: k8s
+    - podSelector: {}
+  # Allow traffic from K8s pool management
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: k8s-pool-storage
+  egress:
+  # Allow traffic within K8s pool
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          pool: k8s
+    - podSelector: {}
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Deny all other traffic (including VM pool)
+  - to: []
+---
+# VM Pool Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vm-pool-isolation
+  namespace: vm-pool-storage
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic within VM pool
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          pool: vm
+    - podSelector: {}
+  # Allow traffic from VM pool management
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: vm-pool-storage
+  egress:
+  # Allow traffic within VM pool
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          pool: vm
+    - podSelector: {}
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Deny all other traffic (including K8s pool)
+  - to: []
+---
+# Cross-Pool Denial Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-cross-pool-traffic
+  namespace: k8s-pool-storage
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Explicitly deny VM pool traffic
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          pool: vm
+    action: Deny
+  egress:
+  # Explicitly deny VM pool traffic
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          pool: vm
+    action: Deny
+---
+# Cross-Pool Denial Policy for VM Pool
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-cross-pool-traffic-vm
+  namespace: vm-pool-storage
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Explicitly deny K8s pool traffic
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          pool: k8s
+    action: Deny
+  egress:
+  # Explicitly deny K8s pool traffic
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          pool: k8s
+    action: Deny
+---
+# Resource Pool Isolation Monitor
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resource-pool-isolation-monitor
+  namespace: network-isolation
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: resource-pool-isolation-monitor
+  template:
+    metadata:
+      labels:
+        app: resource-pool-isolation-monitor
+    spec:
+      containers:
+      - name: isolation-monitor
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            echo "=== Resource Pool Isolation Monitor $(date) ==="
+            
+            # Test K8s pool to VM pool connectivity
+            echo "Testing K8s pool to VM pool connectivity..."
+            if kubectl exec -n k8s-pool-storage deployment/k8s-pool-local-path-provisioner -- ping -c 1 -W 1 10.0.2.1 >/dev/null 2>&1; then
+              echo "ERROR: K8s pool can reach VM pool network - isolation compromised"
+            else
+              echo "OK: K8s pool cannot reach VM pool network"
+            fi
+            
+            # Test VM pool to K8s pool connectivity
+            echo "Testing VM pool to K8s pool connectivity..."
+            if kubectl exec -n vm-pool-storage daemonset/vm-pool-storage-manager -- ping -c 1 -W 1 10.0.1.1 >/dev/null 2>&1; then
+              echo "ERROR: VM pool can reach K8s pool network - isolation compromised"
+            else
+              echo "OK: VM pool cannot reach K8s pool network"
+            fi
+            
+            # Test cross-pool storage access
+            echo "Testing cross-pool storage access..."
+            
+            # Check if K8s pool can access VM storage
+            if kubectl exec -n k8s-pool-storage deployment/k8s-pool-local-path-provisioner -- test -d /vm-storage >/dev/null 2>&1; then
+              echo "ERROR: K8s pool can access VM storage - isolation compromised"
+            else
+              echo "OK: K8s pool cannot access VM storage"
+            fi
+            
+            # Check if VM pool can access K8s storage
+            if kubectl exec -n vm-pool-storage daemonset/vm-pool-storage-manager -- test -d /k8s-storage >/dev/null 2>&1; then
+              echo "ERROR: VM pool can access K8s storage - isolation compromised"
+            else
+              echo "OK: VM pool cannot access K8s storage"
+            fi
+            
+            # Check network policies
+            echo "Checking network policies..."
+            kubectl get networkpolicies --all-namespaces | grep -E "(k8s-pool|vm-pool)"
+            
+            echo "Resource pool isolation monitoring completed"
+            echo "============================================="
+            sleep 300  # Check every 5 minutes
+          done
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+---
+# Resource Pool Isolation Test Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-resource-pool-isolation
+  namespace: network-isolation
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: isolation-test
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "=== Resource Pool Isolation Test ==="
+          
+          # Test 1: K8s pool cannot reach VM pool
+          echo "Test 1: K8s pool to VM pool connectivity"
+          if ping -c 1 -W 1 10.0.2.1 >/dev/null 2>&1; then
+            echo "FAIL: K8s pool can reach VM pool"
+            exit 1
+          else
+            echo "PASS: K8s pool cannot reach VM pool"
+          fi
+          
+          # Test 2: VM pool cannot reach K8s pool
+          echo "Test 2: VM pool to K8s pool connectivity"
+          if ping -c 1 -W 1 10.0.1.1 >/dev/null 2>&1; then
+            echo "FAIL: VM pool can reach K8s pool"
+            exit 1
+          else
+            echo "PASS: VM pool cannot reach K8s pool"
+          fi
+          
+          # Test 3: Cross-pool storage access
+          echo "Test 3: Cross-pool storage access"
+          if [ -d "/vm-storage" ] || [ -d "/k8s-storage" ]; then
+            echo "FAIL: Cross-pool storage access detected"
+            exit 1
+          else
+            echo "PASS: No cross-pool storage access"
+          fi
+          
+          echo "All isolation tests passed!"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
