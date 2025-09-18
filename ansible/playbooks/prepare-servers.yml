@@ -225,6 +225,57 @@
         - /var/lib/kubelet
         - /var/lib/etcd
 
+    - name: Create shared storage directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /shared-storage
+        - /shared-storage/k8s-pv
+        - /shared-storage/vm-storage
+        - /shared-storage/monitoring
+        - /shared-storage/backups
+        - /shared-storage/logs
+
+    - name: Create Kubernetes PV subdirectories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /shared-storage/k8s-pv/databases
+        - /shared-storage/k8s-pv/applications
+        - /shared-storage/k8s-pv/logs
+
+    - name: Create VM storage subdirectories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /shared-storage/vm-storage/images
+        - /shared-storage/vm-storage/templates
+        - /shared-storage/vm-storage/instances
+
+    - name: Create monitoring subdirectories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /shared-storage/monitoring/prometheus
+        - /shared-storage/monitoring/grafana
+        - /shared-storage/monitoring/alertmanager
+
+    - name: Set ownership for shared storage
+      file:
+        path: /shared-storage
+        owner: root
+        group: root
+        mode: '0755'
+        recurse: yes
+
     - name: Display server preparation status
       debug:
         msg: |
@@ -235,6 +286,13 @@
           - Containerd: Installed and configured
           - Kubernetes packages: Installed
           - Firewall: Configured for Kubernetes ports
+          - Shared Storage: 1.8TB RAID storage configured at /shared-storage
+          - Storage Allocation:
+            * Kubernetes PVs: /shared-storage/k8s-pv
+            * VM Storage: /shared-storage/vm-storage
+            * Monitoring: /shared-storage/monitoring
+            * Backups: /shared-storage/backups
+            * Logs: /shared-storage/logs
 
   handlers:
     - name: restart sshd

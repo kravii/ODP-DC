@@ -22,6 +22,7 @@ from .database import get_db, engine
 from .auth import verify_token, get_current_user
 from .hetzner_client import HetznerClient
 from .monitoring import MonitoringService
+from .storage_manager import StorageManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +50,7 @@ security = HTTPBearer()
 # Initialize services
 hetzner_client = HetznerClient()
 monitoring_service = MonitoringService()
+storage_manager = StorageManager()
 
 @app.on_event("startup")
 async def startup_event():
@@ -59,6 +61,9 @@ async def startup_event():
     
     # Initialize monitoring
     await monitoring_service.initialize()
+    
+    # Initialize storage
+    storage_manager.initialize_storage()
     
     logger.info("VM Provisioning API started successfully")
 
@@ -487,6 +492,120 @@ async def get_vm_monitoring(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get VM monitoring data: {str(e)}"
+        )
+
+# Storage Management Endpoints
+@app.get("/api/v1/storage/usage")
+async def get_storage_usage(
+    current_user: User = Depends(get_current_user)
+):
+    """Get storage usage statistics"""
+    try:
+        usage_stats = storage_manager.get_storage_usage()
+        return usage_stats
+    except Exception as e:
+        logger.error(f"Failed to get storage usage: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get storage usage: {str(e)}"
+        )
+
+@app.get("/api/v1/storage/health")
+async def get_storage_health(
+    current_user: User = Depends(get_current_user)
+):
+    """Get storage health information"""
+    try:
+        health_info = storage_manager.get_storage_health()
+        return health_info
+    except Exception as e:
+        logger.error(f"Failed to get storage health: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get storage health: {str(e)}"
+        )
+
+@app.post("/api/v1/storage/vms/{vm_id}/resize")
+async def resize_vm_storage(
+    vm_id: int,
+    new_size_gb: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Resize VM storage"""
+    try:
+        # Check permissions
+        vm = db.query(VM).filter(VM.id == vm_id).first()
+        if not vm:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="VM not found"
+            )
+        
+        if current_user.role == "user" and vm.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        
+        success, message = storage_manager.resize_vm_storage(str(vm_id), new_size_gb)
+        
+        if success:
+            # Update VM record
+            vm.storage = new_size_gb
+            vm.updated_at = datetime.utcnow()
+            db.commit()
+            
+            return {"message": message}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=message
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to resize VM storage: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to resize VM storage: {str(e)}"
+        )
+
+@app.post("/api/v1/storage/vms/{vm_id}/snapshot")
+async def create_vm_snapshot(
+    vm_id: int,
+    snapshot_name: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Create VM snapshot"""
+    try:
+        # Check permissions
+        vm = db.query(VM).filter(VM.id == vm_id).first()
+        if not vm:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="VM not found"
+            )
+        
+        if current_user.role == "user" and vm.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        
+        success, message = storage_manager.create_vm_snapshot(str(vm_id), snapshot_name)
+        
+        if success:
+            return {"message": f"Snapshot created: {snapshot_name}", "snapshot_path": message}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=message
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to create VM snapshot: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create VM snapshot: {str(e)}"
         )
 
 if __name__ == "__main__":

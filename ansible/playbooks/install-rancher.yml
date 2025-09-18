@@ -78,8 +78,8 @@
               memory: 1Gi
           persistence:
             enabled: true
-            storageClass: hetzner-csi
-            size: 10Gi
+            storageClass: local-path
+            size: 20Gi
 
     - name: Wait for Rancher to be ready
       kubernetes.core.k8s_info:

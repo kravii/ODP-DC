@@ -6,10 +6,12 @@ A comprehensive solution for setting up a VM Data Center and Kubernetes cluster 
 
 This project provides:
 - **Pre-provisioned Server Support**: Works with existing Rocky Linux 9 baremetal servers
+- **Shared RAID Storage**: 1.8TB RAID storage shared across all nodes for K8s and VMs
 - **Automated K8s Setup**: High-availability Kubernetes cluster with 3 control plane nodes
 - **SSH Key Management**: Flexible SSH key and port configuration
 - **Resource Pooling**: Unified resource management across all baremetal servers
 - **VM Provisioning**: GUI-based VM creation with multiple OS options
+- **Storage Management**: Shared RAID storage (1.8TB) with dynamic allocation and monitoring
 - **Monitoring**: Comprehensive monitoring with Grafana dashboards
 - **User Management**: RBAC with namespace isolation
 - **Scalability**: Support for up to 200 baremetal servers and 300 VMs

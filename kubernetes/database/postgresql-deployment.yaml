@@ -25,10 +25,10 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: hetzner-csi
+  storageClassName: local-path
   resources:
     requests:
-      storage: 20Gi
+      storage: 50Gi
 ---
 apiVersion: apps/v1
 kind: Deployment

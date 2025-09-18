@@ -30,18 +30,18 @@
               storageSpec:
                 volumeClaimTemplate:
                   spec:
-                    storageClassName: hetzner-csi
+                    storageClassName: local-path
                     accessModes: ["ReadWriteOnce"]
                     resources:
                       requests:
-                        storage: 50Gi
+                        storage: 100Gi
           grafana:
             adminUser: "{{ grafana_admin_user }}"
             adminPassword: "{{ grafana_admin_password }}"
             persistence:
               enabled: true
-              storageClassName: hetzner-csi
-              size: 10Gi
+              storageClassName: local-path
+              size: 20Gi
             service:
               type: LoadBalancer
               port: 80
@@ -50,11 +50,11 @@
               storage:
                 volumeClaimTemplate:
                   spec:
-                    storageClassName: hetzner-csi
+                    storageClassName: local-path
                     accessModes: ["ReadWriteOnce"]
                     resources:
                       requests:
-                        storage: 5Gi
+                        storage: 10Gi
 
     - name: Wait for Prometheus to be ready
       kubernetes.core.k8s_info:
