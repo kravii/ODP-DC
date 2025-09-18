@@ -1,0 +1,363 @@
+---
+# VM Pool Storage Configuration
+# Dedicated storage for VM resource pool (isolated from K8s pool)
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vm-pool-storage
+  labels:
+    name: vm-pool-storage
+    purpose: vm-storage-management
+    pool: vm
+    isolation: enabled
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vm-pool-storage-config
+  namespace: vm-pool-storage
+data:
+  storage-info: |
+    # VM Pool Storage Configuration
+    # Dedicated 1.8TB storage per server for VM provisioning only
+    # Isolated from K8s pool - no cross-pool access
+    
+    # Storage Allocation per VM Server (1.8TB):
+    # - VM Images: 500GB
+    # - VM Templates: 200GB
+    # - VM Instances: 1000GB
+    # - VM Snapshots: 50GB
+    # - VM Backups: 50GB
+    
+    # Directory Structure:
+    # /vm-storage/
+    # ├── images/          # Base VM images
+    # ├── templates/       # VM templates
+    # ├── instances/       # VM instance disks
+    # ├── snapshots/       # VM snapshots
+    # └── backups/         # VM backups
+  pool-isolation: |
+    # Resource Pool Isolation Rules
+    # VM pool servers: 10.0.2.0/24
+    # K8s pool servers: 10.0.1.0/24
+    # Cross-pool access: DENIED
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-vm-pool-storage
+  namespace: vm-pool-storage
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        pool: vm  # Only run on VM pool nodes
+      containers:
+      - name: setup-storage
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Install required packages
+          apk add --no-cache qemu-img
+          
+          # Create VM pool storage directories
+          mkdir -p /vm-storage/{images,templates,instances,snapshots,backups}
+          
+          # Set permissions for VM pool
+          chmod -R 755 /vm-storage
+          chown -R 1001:1001 /vm-storage
+          
+          # Create VM templates
+          echo "Creating VM templates..."
+          
+          # Create Ubuntu 22.04 template
+          qemu-img create -f qcow2 /vm-storage/templates/ubuntu22.qcow2 20G
+          
+          # Create CentOS 7 template
+          qemu-img create -f qcow2 /vm-storage/templates/centos7.qcow2 20G
+          
+          # Create RHEL 8 template
+          qemu-img create -f qcow2 /vm-storage/templates/rhel8.qcow2 20G
+          
+          # Create Rocky Linux 9 template
+          qemu-img create -f qcow2 /vm-storage/templates/rockylinux9.qcow2 20G
+          
+          # Create storage configuration
+          cat > /vm-storage/storage-config.yaml << 'EOF'
+          vm_pool_storage:
+            pool_name: "vm"
+            isolation_enabled: true
+            total_storage_gb: 1800
+            allocations:
+              vm_images: 500
+              vm_templates: 200
+              vm_instances: 1000
+              vm_snapshots: 50
+              vm_backups: 50
+            deny_k8s_pool_access: true
+            vm_templates:
+              - name: "ubuntu22"
+                path: "/vm-storage/templates/ubuntu22.qcow2"
+                size_gb: 20
+              - name: "centos7"
+                path: "/vm-storage/templates/centos7.qcow2"
+                size_gb: 20
+              - name: "rhel8"
+                path: "/vm-storage/templates/rhel8.qcow2"
+                size_gb: 20
+              - name: "rockylinux9"
+                path: "/vm-storage/templates/rockylinux9.qcow2"
+                size_gb: 20
+          EOF
+          
+          # Set up storage monitoring
+          cat > /vm-storage/monitor-vm-storage.sh << 'EOF'
+          #!/bin/sh
+          echo "=== VM Pool Storage Usage ==="
+          df -h /vm-storage
+          echo ""
+          echo "=== VM Pool Directory Usage ==="
+          du -sh /vm-storage/*
+          echo ""
+          echo "=== VM Pool Storage Health ==="
+          # Check if K8s pool access is blocked
+          if ping -c 1 -W 1 10.0.1.1 >/dev/null 2>&1; then
+            echo "WARNING: K8s pool network accessible - isolation may be compromised"
+          else
+            echo "OK: K8s pool network isolated"
+          fi
+          
+          # Check VM templates
+          echo "=== VM Templates ==="
+          ls -la /vm-storage/templates/
+          EOF
+          
+          chmod +x /vm-storage/monitor-vm-storage.sh
+          
+          echo "VM pool storage setup completed"
+        volumeMounts:
+        - name: vm-storage
+          mountPath: /vm-storage
+      volumes:
+      - name: vm-storage
+        hostPath:
+          path: /
+---
+# VM Pool Storage Manager
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vm-pool-storage-manager
+  namespace: vm-pool-storage
+spec:
+  selector:
+    matchLabels:
+      app: vm-pool-storage-manager
+  template:
+    metadata:
+      labels:
+        app: vm-pool-storage-manager
+    spec:
+      nodeSelector:
+        pool: vm  # Only run on VM pool nodes
+      containers:
+      - name: vm-pool-storage-manager
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Install required packages
+          apk add --no-cache qemu-img bc
+          
+          # Function to get storage usage
+          get_storage_usage() {
+            local path="$1"
+            if [ -d "$path" ]; then
+              du -s "$path" 2>/dev/null | awk '{print $1}' || echo "0"
+            else
+              echo "0"
+            fi
+          }
+          
+          # Function to convert KB to GB
+          kb_to_gb() {
+            local kb="$1"
+            echo "scale=2; $kb / 1024 / 1024" | bc
+          }
+          
+          # Monitor VM storage usage
+          while true; do
+            echo "=== VM Pool Storage Report $(date) ==="
+            
+            # Get VM storage usage
+            vm_usage_kb=$(get_storage_usage "/vm-storage")
+            vm_usage_gb=$(kb_to_gb "$vm_usage_kb")
+            
+            echo "VM Pool Storage Usage: ${vm_usage_gb}GB / 1800GB"
+            
+            # Check if approaching limit
+            if (( $(echo "$vm_usage_gb > 1620" | bc -l) )); then
+              echo "WARNING: VM storage usage is ${vm_usage_gb}GB (limit: 1800GB)"
+            fi
+            
+            # Get individual VM sizes
+            echo "Individual VM Sizes:"
+            for vm_dir in /vm-storage/instances/*; do
+              if [ -d "$vm_dir" ]; then
+                vm_id=$(basename "$vm_dir")
+                vm_size_kb=$(get_storage_usage "$vm_dir")
+                vm_size_gb=$(kb_to_gb "$vm_size_kb")
+                echo "  VM $vm_id: ${vm_size_gb}GB"
+              fi
+            done
+            
+            # Check isolation
+            echo "VM Pool Isolation Check:"
+            if ping -c 1 -W 1 10.0.1.1 >/dev/null 2>&1; then
+              echo "WARNING: K8s pool network accessible - isolation compromised"
+            else
+              echo "OK: K8s pool network isolated"
+            fi
+            
+            # Check K8s pool storage access
+            if [ -d "/k8s-storage" ]; then
+              echo "ERROR: K8s pool storage accessible - isolation compromised"
+            else
+              echo "OK: K8s pool storage isolated"
+            fi
+            
+            # Check VM templates
+            echo "VM Templates:"
+            ls -la /vm-storage/templates/
+            
+            echo "VM pool storage monitoring completed"
+            echo "====================================="
+            sleep 300  # Check every 5 minutes
+          done
+        volumeMounts:
+        - name: vm-storage
+          mountPath: /vm-storage
+      volumes:
+      - name: vm-storage
+        hostPath:
+          path: /
+---
+# VM Pool Storage Cleanup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vm-pool-storage-cleanup
+  namespace: vm-pool-storage
+spec:
+  schedule: "0 3 * * *"  # Run daily at 3 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          nodeSelector:
+            pool: vm  # Only run on VM pool nodes
+          containers:
+          - name: cleanup
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Install required packages
+              apk add --no-cache qemu-img
+              
+              echo "Starting VM pool storage cleanup..."
+              
+              # Clean up old VM snapshots (older than 90 days)
+              find /vm-storage/snapshots -type f -mtime +90 -delete 2>/dev/null || true
+              echo "Cleaned up old VM snapshots"
+              
+              # Clean up orphaned VM files
+              find /vm-storage/instances -name "*.qcow2" -mtime +7 -exec rm -f {} \; 2>/dev/null || true
+              echo "Cleaned up orphaned VM files"
+              
+              # Clean up temporary VM files
+              find /vm-storage -name "*.tmp" -delete 2>/dev/null || true
+              find /vm-storage -name "*.temp" -delete 2>/dev/null || true
+              echo "Cleaned up temporary VM files"
+              
+              # Optimize VM disk images
+              echo "Optimizing VM disk images..."
+              for qcow_file in /vm-storage/instances/*/*.qcow2; do
+                if [ -f "$qcow_file" ]; then
+                  echo "Optimizing: $qcow_file"
+                  qemu-img convert -O qcow2 -c "$qcow_file" "${qcow_file}.optimized" 2>/dev/null || true
+                  if [ -f "${qcow_file}.optimized" ]; then
+                    mv "${qcow_file}.optimized" "$qcow_file"
+                  fi
+                fi
+              done
+              
+              # Verify isolation
+              if [ -d "/k8s-storage" ]; then
+                echo "ERROR: K8s pool storage accessible during cleanup"
+                exit 1
+              fi
+              
+              echo "VM pool storage cleanup completed"
+            volumeMounts:
+            - name: vm-storage
+              mountPath: /vm-storage
+          volumes:
+          - name: vm-storage
+            hostPath:
+              path: /
+          restartPolicy: OnFailure
+---
+# VM Pool Storage Persistent Volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vm-pool-storage-pv
+spec:
+  capacity:
+    storage: 1800Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: vm-pool-storage
+  hostPath:
+    path: /vm-storage
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: pool
+          operator: In
+          values: ["vm"]
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: vm-pool-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+allowedTopologies:
+- matchLabelExpressions:
+  - key: pool
+    values: ["vm"]
+---
+# VM Pool Storage API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm-pool-storage-api
+  namespace: vm-pool-storage
+spec:
+  selector:
+    app: vm-pool-storage-manager
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
