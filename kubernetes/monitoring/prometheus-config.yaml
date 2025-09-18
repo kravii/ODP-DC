@@ -1,0 +1,235 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: 'hetzner-dc-cluster'
+        environment: 'production'
+
+    rule_files:
+      - "/etc/prometheus/rules/*.yml"
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+              - alertmanager:9093
+
+    scrape_configs:
+      # Kubernetes API Server
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+        - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: default;kubernetes;https
+
+      # Kubernetes Nodes
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+        - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics
+
+      # Kubernetes Pods
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: kubernetes_pod_name
+
+      # Node Exporter
+      - job_name: 'node-exporter'
+        kubernetes_sd_configs:
+        - role: endpoints
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_endpoints_name]
+          regex: 'node-exporter'
+          action: keep
+
+      # cAdvisor
+      - job_name: 'cadvisor'
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+
+      # kube-state-metrics
+      - job_name: 'kube-state-metrics'
+        kubernetes_sd_configs:
+        - role: endpoints
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_endpoints_name]
+          regex: 'kube-state-metrics'
+          action: keep
+
+      # Baremetal Servers (via Node Exporter)
+      - job_name: 'baremetal-servers'
+        static_configs:
+        - targets: 
+          - 'hetzner-dc-cluster-cp-1:9100'
+          - 'hetzner-dc-cluster-cp-2:9100'
+          - 'hetzner-dc-cluster-cp-3:9100'
+          - 'hetzner-dc-cluster-worker-1:9100'
+          - 'hetzner-dc-cluster-worker-2:9100'
+          - 'hetzner-dc-cluster-worker-3:9100'
+        relabel_configs:
+        - source_labels: [__address__]
+          regex: '([^:]+):.*'
+          target_label: instance
+          replacement: '${1}'
+
+  alert-rules.yml: |
+    groups:
+    - name: kubernetes.rules
+      rules:
+      - alert: KubernetesNodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kubernetes node not ready"
+          description: "Node {{ $labels.node }} has been unready for more than 5 minutes."
+
+      - alert: KubernetesNodeMemoryHigh
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on node"
+          description: "Node {{ $labels.instance }} has high memory usage: {{ $value }}%"
+
+      - alert: KubernetesNodeDiskSpaceLow
+        expr: (1 - (node_filesystem_avail_bytes / node_filesystem_size_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space on node"
+          description: "Node {{ $labels.instance }} has low disk space: {{ $value }}%"
+
+      - alert: KubernetesNodeCPUHigh
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on node"
+          description: "Node {{ $labels.instance }} has high CPU usage: {{ $value }}%"
+
+      - alert: KubernetesPodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod is crash looping"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping."
+
+      - alert: KubernetesPodNotReady
+        expr: kube_pod_status_phase{phase!="Running",phase!="Succeeded"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod is not ready"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is in {{ $labels.phase }} phase."
+
+    - name: baremetal.rules
+      rules:
+      - alert: BaremetalServerDown
+        expr: up{job="baremetal-servers"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Baremetal server is down"
+          description: "Baremetal server {{ $labels.instance }} is not responding."
+
+      - alert: BaremetalHighTemperature
+        expr: node_hwmon_temp_celsius > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High temperature on baremetal server"
+          description: "Baremetal server {{ $labels.instance }} has high temperature: {{ $value }}°C"
+
+      - alert: BaremetalDiskFailure
+        expr: node_disk_io_time_seconds_total > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Potential disk failure on baremetal server"
+          description: "Baremetal server {{ $labels.instance }} shows signs of disk failure."
+
+    - name: vm.rules
+      rules:
+      - alert: VMCreationFailed
+        expr: vm_provisioning_failures_total > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VM creation failed"
+          description: "VM creation failed: {{ $labels.reason }}"
+
+      - alert: VMResourceExhaustion
+        expr: vm_resource_usage_percentage > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "VM resource exhaustion"
+          description: "VM {{ $labels.vm_name }} is using {{ $value }}% of allocated resources."

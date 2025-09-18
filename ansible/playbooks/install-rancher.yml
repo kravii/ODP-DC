@@ -1,0 +1,189 @@
+---
+- name: Install Rancher on Kubernetes Cluster
+  hosts: control_plane[0]
+  become: yes
+  vars:
+    rancher_namespace: "cattle-system"
+    rancher_version: "2.7.5"
+    rancher_hostname: "rancher.{{ cluster_name }}.local"
+    rancher_admin_password: "admin123"
+    cert_manager_version: "v1.13.0"
+
+  tasks:
+    - name: Add Jetstack Helm repository
+      kubernetes.core.helm_repository:
+        name: jetstack
+        repo_url: https://charts.jetstack.io
+
+    - name: Install cert-manager
+      kubernetes.core.helm:
+        name: cert-manager
+        chart_ref: jetstack/cert-manager
+        release_namespace: cert-manager
+        create_namespace: yes
+        version: "{{ cert_manager_version }}"
+        values:
+          installCRDs: true
+          global:
+            leaderElection:
+              namespace: cert-manager
+
+    - name: Wait for cert-manager to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: cert-manager
+        label_selectors:
+          - app.kubernetes.io/name=cert-manager
+      register: cert_manager_deployment
+      until: cert_manager_deployment.resources[0].status.readyReplicas == cert_manager_deployment.resources[0].status.replicas
+      retries: 30
+      delay: 10
+
+    - name: Add Rancher Helm repository
+      kubernetes.core.helm_repository:
+        name: rancher-stable
+        repo_url: https://releases.rancher.com/server-charts/stable
+
+    - name: Create Rancher namespace
+      kubernetes.core.k8s:
+        name: "{{ rancher_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Install Rancher
+      kubernetes.core.helm:
+        name: rancher
+        chart_ref: rancher-stable/rancher
+        release_namespace: "{{ rancher_namespace }}"
+        version: "{{ rancher_version }}"
+        values:
+          hostname: "{{ rancher_hostname }}"
+          bootstrapPassword: "{{ rancher_admin_password }}"
+          ingress:
+            tls:
+              source: letsEncrypt
+          letsEncrypt:
+            email: admin@{{ cluster_name }}.local
+            environment: staging
+          replicas: 3
+          antiAffinity: required
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+            requests:
+              cpu: 500m
+              memory: 1Gi
+          persistence:
+            enabled: true
+            storageClass: hetzner-csi
+            size: 10Gi
+
+    - name: Wait for Rancher to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ rancher_namespace }}"
+        label_selectors:
+          - app=rancher
+      register: rancher_deployment
+      until: rancher_deployment.resources[0].status.readyReplicas == rancher_deployment.resources[0].status.replicas
+      retries: 60
+      delay: 15
+
+    - name: Get Rancher service information
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: "{{ rancher_namespace }}"
+        name: rancher
+      register: rancher_service
+
+    - name: Create Rancher ingress
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: rancher-ingress
+            namespace: "{{ rancher_namespace }}"
+            annotations:
+              kubernetes.io/ingress.class: "nginx"
+              cert-manager.io/cluster-issuer: "letsencrypt-staging"
+          spec:
+            tls:
+            - hosts:
+              - "{{ rancher_hostname }}"
+              secretName: rancher-tls
+            rules:
+            - host: "{{ rancher_hostname }}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: rancher
+                      port:
+                        number: 80
+
+    - name: Display Rancher access information
+      debug:
+        msg: |
+          Rancher installation completed!
+          
+          Access Rancher:
+          - URL: https://{{ rancher_hostname }}
+          - Username: admin
+          - Password: {{ rancher_admin_password }}
+          
+          To access locally:
+          - kubectl port-forward svc/rancher 8080:80 -n {{ rancher_namespace }}
+          - Open https://localhost:8080
+          
+          Note: Update your /etc/hosts file to point {{ rancher_hostname }} to the cluster IP
+
+    - name: Create Rancher cluster configuration
+      copy:
+        content: |
+          # Rancher Configuration
+          RANCHER_URL=https://{{ rancher_hostname }}
+          RANCHER_ADMIN_USER=admin
+          RANCHER_ADMIN_PASSWORD={{ rancher_admin_password }}
+          RANCHER_NAMESPACE={{ rancher_namespace }}
+          RANCHER_VERSION={{ rancher_version }}
+          
+          # Cluster Information
+          CLUSTER_NAME={{ cluster_name }}
+          API_SERVER_ENDPOINT={{ api_server_endpoint }}
+          
+          # Access Information
+          KUBECONFIG_PATH=/root/.kube/config
+        dest: /root/rancher-config.env
+        mode: '0644'
+
+    - name: Create Rancher access script
+      copy:
+        content: |
+          #!/bin/bash
+          # Rancher Access Script
+          
+          echo "Setting up Rancher access..."
+          
+          # Port forward Rancher service
+          kubectl port-forward svc/rancher 8080:80 -n {{ rancher_namespace }} &
+          PORT_FORWARD_PID=$!
+          
+          echo "Rancher is now accessible at:"
+          echo "  URL: https://localhost:8080"
+          echo "  Username: admin"
+          echo "  Password: {{ rancher_admin_password }}"
+          echo ""
+          echo "Press Ctrl+C to stop port forwarding"
+          
+          # Wait for user to stop
+          wait $PORT_FORWARD_PID
+        dest: /root/access-rancher.sh
+        mode: '0755'

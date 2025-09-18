@@ -1,246 +1,165 @@
-# Data Center Management System on Hetzner Baremetal
+# Hetzner Baremetal DC & Kubernetes Cluster Setup
 
-A comprehensive solution for managing a data center infrastructure on Hetzner baremetal servers with VM provisioning, monitoring, and user management capabilities.
+A comprehensive solution for setting up a VM Data Center and Kubernetes cluster on Hetzner baremetal servers with automated provisioning, monitoring, and management capabilities.
 
-## Features
+## 🏗️ Architecture Overview
 
-### 🖥️ Baremetal Management
-- **Resource Pool Management**: Aggregate CPU, Memory, Storage, and IOPS from all baremetal servers
-- **Dynamic Scaling**: Add/remove up to 200 baremetal servers with automatic resource pool updates
-- **Health Monitoring**: Real-time monitoring of server health, resource utilization, and performance
+This project provides:
+- **Automated K8s Setup**: High-availability Kubernetes cluster with 3 control plane nodes
+- **Resource Pooling**: Unified resource management across all baremetal servers
+- **VM Provisioning**: GUI-based VM creation with multiple OS options
+- **Monitoring**: Comprehensive monitoring with Grafana dashboards
+- **User Management**: RBAC with namespace isolation
+- **Scalability**: Support for up to 200 baremetal servers and 300 VMs
 
-### 🖼️ VM Provisioning
-- **Multi-OS Support**: CentOS 7, RHEL 7/8/9, Rocky Linux 9, Ubuntu 20/22/24, OEL 8.10
-- **Flexible Resource Allocation**: Choose CPU, memory, storage, and mount points per VM
-- **Scale Support**: Launch up to 300 VMs with automatic IP management
-- **Default Configuration**: Pre-configured `acceldata` user with SSH key access
+## 🚀 Features
 
-### 📊 Monitoring & Alerts
-- **Real-time Dashboard**: Monitor all baremetals and VMs with hostname/IP tracking
-- **Resource Utilization**: CPU, memory, storage monitoring with threshold alerts
-- **Notification System**: Slack and JIRA integration for incidents and alerts
+### Core Infrastructure
+- ✅ Automated Kubernetes cluster setup with HA control plane
+- ✅ Resource pooling from multiple baremetal servers
+- ✅ Support for up to 200 baremetal servers
+- ✅ Automated VM provisioning (up to 300 VMs)
+- ✅ Multiple OS support (CentOS7, RHEL7/8/9, RockyLinux9, Ubuntu20/22/24, OEL8.10)
 
-### 👥 User Management
-- **Role-based Access**: Admin and user roles with different permissions
-- **VM Operations**: Launch, terminate, and modify VM resources based on user role
-- **Secure Authentication**: JWT-based authentication with role management
+### Management & Monitoring
+- ✅ Rancher-based cluster management
+- ✅ GUI for adding/removing servers from cluster
+- ✅ Resource allocation and scaling per namespace
+- ✅ Comprehensive monitoring dashboard
+- ✅ Slack/JIRA notification system
+- ✅ Health monitoring for all baremetal servers
 
-## Architecture
+### Security & Access
+- ✅ User management with admin/user roles
+- ✅ Namespace-based resource isolation
+- ✅ Default user `acceldata` with SSH key on all VMs/containers
+- ✅ RBAC configuration
+
+## 📁 Project Structure
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   Backend API   │    │   Database      │
-│   (React)       │◄──►│   (FastAPI)     │◄──►│   (PostgreSQL)  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                │
-                                ▼
-                       ┌─────────────────┐
-                       │   Monitoring    │
-                       │   (Prometheus   │
-                       │   + Grafana)    │
-                       └─────────────────┘
-                                │
-                                ▼
-                       ┌─────────────────┐
-                       │   Hetzner       │
-                       │   Baremetals    │
-                       │   (200 max)     │
-                       └─────────────────┘
+├── terraform/                 # Infrastructure as Code
+│   ├── hetzner/              # Hetzner provider configuration
+│   ├── kubernetes/           # K8s cluster setup
+│   └── monitoring/           # Monitoring infrastructure
+├── ansible/                  # Configuration management
+│   ├── playbooks/           # Ansible playbooks
+│   ├── roles/               # Reusable roles
+│   └── inventory/           # Server inventory
+├── kubernetes/               # K8s manifests and configs
+│   ├── cluster-setup/       # Cluster initialization
+│   ├── monitoring/          # Monitoring stack
+│   └── applications/        # Application deployments
+├── monitoring/               # Monitoring configuration
+│   ├── prometheus/          # Prometheus configs
+│   ├── grafana/             # Grafana dashboards
+│   └── alertmanager/        # Alerting rules
+├── vm-provisioning/         # VM management system
+│   ├── api/                 # REST API for VM operations
+│   ├── frontend/            # Web GUI
+│   └── templates/           # VM templates
+├── scripts/                 # Utility scripts
+└── docs/                    # Documentation
 ```
 
-## Quick Start
+## 🛠️ Prerequisites
 
-### Prerequisites
-- Docker and Docker Compose
-- Pre-provisioned baremetal servers from IT team
-- SSH keys for baremetal access
-- Slack webhook URL (optional)
-- JIRA credentials (optional)
+- Terraform >= 1.5.0
+- Ansible >= 2.12.0
+- kubectl >= 1.28.0
+- Helm >= 3.12.0
+- Docker >= 20.10.0
+- Hetzner Cloud API token
 
-### Installation
+## 🚀 Quick Start
 
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd datacenter-management
+   cd hetzner-dc-k8s-setup
    ```
 
-2. **Run the setup script**
-   ```bash
-   chmod +x scripts/setup.sh
-   ./scripts/setup.sh
-   ```
-
-3. **Or configure manually**
+2. **Configure environment**
    ```bash
    cp .env.example .env
-   # Edit .env with your configuration
-   docker-compose up -d
+   # Edit .env with your Hetzner API token and configuration
    ```
 
-4. **Access the dashboard**
-   - Frontend: http://localhost:3000
-   - API Documentation: http://localhost:8000/docs
-   - Monitoring: http://localhost:3001
-   - MySQL Database: localhost:3306
+3. **Deploy infrastructure**
+   ```bash
+   cd terraform
+   terraform init
+   terraform plan
+   terraform apply
+   ```
 
-### Configuration
+4. **Setup Kubernetes cluster**
+   ```bash
+   cd ../ansible
+   ansible-playbook -i inventory/hosts.yml playbooks/setup-k8s-cluster.yml
+   ```
 
-#### Environment Variables
-```bash
-# Database
-MYSQL_PASSWORD=your_password
-MYSQL_ROOT_PASSWORD=your_root_password
+5. **Deploy monitoring stack**
+   ```bash
+   cd ../kubernetes
+   kubectl apply -f monitoring/
+   ```
 
-# JWT
-JWT_SECRET_KEY=your_jwt_secret
+6. **Access Rancher dashboard**
+   ```bash
+   kubectl port-forward svc/rancher-server 8080:80
+   # Open http://localhost:8080
+   ```
 
-# Slack (optional)
-SLACK_WEBHOOK_URL=your_slack_webhook
+## 📊 Monitoring
 
-# JIRA (optional)
-JIRA_URL=your_jira_url
-JIRA_USERNAME=your_jira_username
-JIRA_API_TOKEN=your_jira_token
-```
+The monitoring stack includes:
+- **Prometheus**: Metrics collection and storage
+- **Grafana**: Visualization and dashboards
+- **AlertManager**: Alert routing and notification
+- **Node Exporter**: Baremetal metrics
+- **cAdvisor**: Container metrics
 
-## Usage
+Access Grafana at `http://<grafana-service>:3000` (default: admin/admin)
 
-### Adding Baremetal Servers
+## 🔧 Management Tools
 
-1. **First, add SSH keys** (if not already done):
-   - Go to "SSH Keys" in the sidebar
-   - Click "Add SSH Key"
-   - Upload or paste your SSH public key
-   - Set as default if needed
+This project integrates with:
+- **Rancher**: Cluster management and GUI
+- **Helm**: Package management
+- **kubectl**: Command-line interface
+- **k9s**: Terminal-based UI
+- **Telepresence**: Local development integration
 
-2. **Add baremetal server**:
-   - Go to "Baremetal Management"
-   - Click "Add Server" and provide:
-     - Server name/hostname (provided by IT team)
-     - IP address (provided by IT team)
-     - Operating System (RHEL 8, Rocky Linux 9, Ubuntu 20/22)
-     - Resource specifications (CPU, Memory)
-     - Storage mount points (multiple mounts supported)
-     - SSH access configuration (select SSH key, username, port)
-3. The server will be added to the resource pool automatically
+## 📚 Documentation
 
-### Provisioning VMs
+- [Setup Guide](docs/setup-guide.md)
+- [Configuration Reference](docs/configuration.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [API Documentation](docs/api.md)
 
-1. Go to "VM Management" in the dashboard
-2. Click "Launch VM"
-3. Configure:
-   - VM hostname
-   - Operating system image (pre-configured dropdown)
-   - CPU and memory allocation
-   - Storage configuration with mount points
-4. Click "Launch" to provision the VM
-
-### Monitoring
-
-- **Baremetal Health**: View real-time status and resource utilization
-- **VM Status**: Monitor all provisioned VMs
-- **Alerts**: Configure thresholds and notification channels
-
-## API Documentation
-
-The API is fully documented with Swagger UI available at `/docs` endpoint.
-
-### Key Endpoints
-
-- `GET /api/baremetals` - List all baremetal servers
-- `POST /api/baremetals` - Add new baremetal server
-- `GET /api/vms` - List all VMs
-- `POST /api/vms` - Launch new VM
-- `GET /api/monitoring/health` - Get system health status
-
-## Monitoring and Alerts
-
-### Metrics Collected
-- CPU utilization per baremetal and VM
-- Memory usage and available
-- Storage utilization and IOPS
-- Network traffic and latency
-- System health and uptime
-
-### Alert Thresholds
-- CPU usage > 80%
-- Memory usage > 85%
-- Disk usage > 90%
-- System down/offline
-
-### Notification Channels
-- Slack webhook integration
-- JIRA ticket creation
-- Email notifications (configurable)
-
-## Security
-
-- JWT-based authentication
-- Role-based access control (RBAC)
-- SSH key management for VM access
-- Secure API endpoints with rate limiting
-- Database encryption at rest
-
-## Scaling
-
-### Horizontal Scaling
-- Add up to 200 baremetal servers
-- Launch up to 300 VMs
-- Automatic load balancing across servers
-
-### Resource Management
-- Dynamic resource allocation
-- Automatic failover for failed servers
-- Resource optimization and rebalancing
-
-## Troubleshooting
-
-### Common Issues
-
-1. **VM Launch Failures**
-   - Check resource availability in pool
-   - Verify image availability
-   - Check network connectivity
-
-2. **Monitoring Alerts**
-   - Review threshold configurations
-   - Check notification channel settings
-   - Verify server connectivity
-
-3. **Performance Issues**
-   - Monitor resource utilization
-   - Check for resource contention
-   - Review VM resource allocations
-
-### Logs
-- Application logs: `docker-compose logs -f app`
-- Database logs: `docker-compose logs -f db`
-- Monitoring logs: `docker-compose logs -f monitoring`
-
-## Contributing
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Add tests for new functionality
+4. Add tests if applicable
 5. Submit a pull request
 
-## License
+## 📄 License
 
-MIT License - see LICENSE file for details
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Support
+## 🆘 Support
 
 For support and questions:
-- Create an issue in the repository
-- Check the documentation
-- Review the troubleshooting guide
+- Create an issue in the GitHub repository
+- Check the [troubleshooting guide](docs/troubleshooting.md)
+- Review the [FAQ](docs/faq.md)
 
-## Roadmap
+## 🔄 Version History
 
-- [ ] Kubernetes integration
-- [ ] Advanced networking features
-- [ ] Backup and disaster recovery
-- [ ] Cost optimization tools
-- [ ] Multi-cloud support
+- **v1.0.0**: Initial release with basic K8s cluster setup
+- **v1.1.0**: Added VM provisioning capabilities
+- **v1.2.0**: Enhanced monitoring and alerting
+- **v1.3.0**: GUI improvements and user management

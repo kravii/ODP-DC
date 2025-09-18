@@ -1,0 +1,323 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-provisioner
+  namespace: vm-system
+  labels:
+    app: vm-provisioner
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vm-provisioner
+  template:
+    metadata:
+      labels:
+        app: vm-provisioner
+    spec:
+      serviceAccountName: vm-provisioner
+      containers:
+      - name: vm-provisioner
+        image: vm-provisioner:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: vm-provisioner-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: vm-provisioner-secrets
+              key: redis-url
+        - name: HETZNER_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vm-provisioner-secrets
+              key: hetzner-api-token
+        - name: SSH_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vm-provisioner-secrets
+              key: ssh-private-key
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: vm-templates
+          mountPath: /app/templates
+        - name: vm-config
+          mountPath: /app/config
+      volumes:
+      - name: vm-templates
+        configMap:
+          name: vm-templates
+      - name: vm-config
+        configMap:
+          name: vm-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm-provisioner-service
+  namespace: vm-system
+spec:
+  selector:
+    app: vm-provisioner
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vm-provisioner
+  namespace: vm-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vm-provisioner
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "events", "configmaps", "secrets"]
+  verbs: ["*"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "replicasets", "statefulsets"]
+  verbs: ["*"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["servicemonitors"]
+  verbs: ["get", "create"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list", "get", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vm-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vm-provisioner
+subjects:
+- kind: ServiceAccount
+  name: vm-provisioner
+  namespace: vm-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vm-templates
+  namespace: vm-system
+data:
+  centos7.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+  rhel7.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+  rhel8.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+  rhel9.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+  rockylinux9.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+  ubuntu20.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable ssh
+      - systemctl start ssh
+  ubuntu22.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable ssh
+      - systemctl start ssh
+  ubuntu24.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable ssh
+      - systemctl start ssh
+  oel8.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vm-config
+  namespace: vm-system
+data:
+  config.yaml: |
+    vm:
+      max_count: 300
+      ip_range: "192.168.100.0/24"
+      default_user: "acceldata"
+      default_ssh_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc"
+    hetzner:
+      region: "fsn1"
+      server_types:
+        - "cx11"
+        - "cx21"
+        - "cx31"
+        - "cx41"
+        - "cx51"
+      images:
+        centos7: "centos-7"
+        rhel7: "rhel-7"
+        rhel8: "rhel-8"
+        rhel9: "rhel-9"
+        rockylinux9: "rocky-9"
+        ubuntu20: "ubuntu-20.04"
+        ubuntu22: "ubuntu-22.04"
+        ubuntu24: "ubuntu-24.04"
+        oel8: "oracle-linux-8"

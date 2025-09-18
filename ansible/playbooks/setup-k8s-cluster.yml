@@ -1,0 +1,249 @@
+---
+- name: Setup Kubernetes Cluster on Hetzner Baremetal Servers
+  hosts: kubernetes_cluster
+  become: yes
+  gather_facts: yes
+  vars:
+    kube_version: "1.28.0"
+    pod_cidr: "10.244.0.0/16"
+    service_cidr: "10.96.0.0/12"
+    api_server_endpoint: "{{ hostvars[groups['control_plane'][0]]['api_server_endpoint'] }}"
+
+  pre_tasks:
+    - name: Update system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+      when: ansible_os_family == "Debian"
+
+    - name: Install required packages
+      package:
+        name:
+          - curl
+          - wget
+          - git
+          - vim
+          - htop
+          - net-tools
+          - bridge-utils
+          - iptables
+          - conntrack
+          - socat
+          - ipvsadm
+        state: present
+
+    - name: Load kernel modules
+      modprobe:
+        name: "{{ item }}"
+      loop:
+        - br_netfilter
+        - overlay
+
+    - name: Configure sysctl for Kubernetes
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop:
+        - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+        - { name: 'net.ipv4.ip_forward', value: '1' }
+        - { name: 'vm.swappiness', value: '0' }
+
+    - name: Configure Docker daemon for Kubernetes
+      copy:
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "100m"
+            },
+            "storage-driver": "overlay2"
+          }
+        dest: /etc/docker/daemon.json
+        mode: '0644'
+      notify: restart docker
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+  tasks:
+    - name: Install Kubernetes packages
+      apt:
+        name:
+          - kubelet={{ kube_version }}-00
+          - kubeadm={{ kube_version }}-00
+          - kubectl={{ kube_version }}-00
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Hold Kubernetes packages
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: Enable kubelet service
+      systemd:
+        name: kubelet
+        enabled: yes
+        daemon_reload: yes
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted
+
+- name: Initialize Kubernetes Control Plane
+  hosts: control_plane[0]
+  become: yes
+  vars:
+    kube_version: "1.28.0"
+    pod_cidr: "10.244.0.0/16"
+    service_cidr: "10.96.0.0/12"
+    api_server_endpoint: "{{ hostvars[groups['control_plane'][0]]['api_server_endpoint'] }}"
+
+  tasks:
+    - name: Initialize Kubernetes cluster
+      command: >
+        kubeadm init
+        --control-plane-endpoint={{ api_server_endpoint }}:6443
+        --pod-network-cidr={{ pod_cidr }}
+        --service-cidr={{ service_cidr }}
+        --kubernetes-version={{ kube_version }}
+        --upload-certs
+        --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+      register: kubeadm_init
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy admin.conf to .kube/config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        mode: '0644'
+
+    - name: Create .kube directory for acceldata user
+      file:
+        path: /home/acceldata/.kube
+        state: directory
+        owner: acceldata
+        group: acceldata
+        mode: '0755'
+
+    - name: Copy admin.conf to acceldata .kube/config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/acceldata/.kube/config
+        remote_src: yes
+        owner: acceldata
+        group: acceldata
+        mode: '0644'
+
+    - name: Extract join command for control plane nodes
+      set_fact:
+        control_plane_join_command: "{{ kubeadm_init.stdout_lines[-2] }}"
+
+    - name: Extract join command for worker nodes
+      set_fact:
+        worker_join_command: "{{ kubeadm_init.stdout_lines[-1] }}"
+
+    - name: Install Flannel CNI
+      command: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+      when: kubeadm_init.rc == 0
+
+- name: Join Control Plane Nodes
+  hosts: control_plane[1:]
+  become: yes
+  vars:
+    control_plane_join_command: "{{ hostvars[groups['control_plane'][0]]['control_plane_join_command'] }}"
+
+  tasks:
+    - name: Join control plane node to cluster
+      command: "{{ control_plane_join_command }}"
+      register: join_result
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy admin.conf to .kube/config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        mode: '0644'
+
+    - name: Create .kube directory for acceldata user
+      file:
+        path: /home/acceldata/.kube
+        state: directory
+        owner: acceldata
+        group: acceldata
+        mode: '0755'
+
+    - name: Copy admin.conf to acceldata .kube/config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/acceldata/.kube/config
+        remote_src: yes
+        owner: acceldata
+        group: acceldata
+        mode: '0644'
+
+- name: Join Worker Nodes
+  hosts: worker_nodes
+  become: yes
+  vars:
+    worker_join_command: "{{ hostvars[groups['control_plane'][0]]['worker_join_command'] }}"
+
+  tasks:
+    - name: Join worker node to cluster
+      command: "{{ worker_join_command }}"
+      register: join_result
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+
+- name: Verify Cluster Status
+  hosts: control_plane[0]
+  become: yes
+  tasks:
+    - name: Wait for nodes to be ready
+      command: kubectl get nodes
+      register: node_status
+      until: "'Ready' in node_status.stdout"
+      retries: 30
+      delay: 10
+
+    - name: Display cluster status
+      debug:
+        msg: "{{ node_status.stdout_lines }}"
+
+    - name: Display cluster info
+      command: kubectl cluster-info
+      register: cluster_info
+
+    - name: Show cluster information
+      debug:
+        msg: "{{ cluster_info.stdout_lines }}"
