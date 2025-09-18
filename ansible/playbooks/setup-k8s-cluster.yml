@@ -1,5 +1,5 @@
 ---
-- name: Setup Kubernetes Cluster on Hetzner Baremetal Servers
+- name: Setup Kubernetes Cluster on Rocky Linux 9 Baremetal Servers
   hosts: kubernetes_cluster
   become: yes
   gather_facts: yes
@@ -11,10 +11,10 @@
 
   pre_tasks:
     - name: Update system packages
-      apt:
-        update_cache: yes
-        upgrade: dist
-      when: ansible_os_family == "Debian"
+      dnf:
+        name: "*"
+        state: latest
+      when: ansible_os_family == "RedHat"
 
     - name: Install required packages
       package:
@@ -27,9 +27,11 @@
           - net-tools
           - bridge-utils
           - iptables
-          - conntrack
+          - conntrack-tools
           - socat
           - ipvsadm
+          - firewalld
+          - NetworkManager
         state: present
 
     - name: Load kernel modules
@@ -51,46 +53,74 @@
         - { name: 'net.ipv4.ip_forward', value: '1' }
         - { name: 'vm.swappiness', value: '0' }
 
-    - name: Configure Docker daemon for Kubernetes
+    - name: Start and enable firewalld
+      systemd:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Configure firewalld for Kubernetes
+      firewalld:
+        port: "{{ item }}"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      loop:
+        - "6443/tcp"
+        - "2379-2380/tcp"
+        - "10250/tcp"
+        - "10251/tcp"
+        - "10252/tcp"
+        - "10255/tcp"
+        - "30000-32767/tcp"
+        - "8285/udp"
+        - "8472/udp"
+
+    - name: Install containerd
+      package:
+        name: containerd.io
+        state: present
+
+    - name: Configure containerd
       copy:
         content: |
-          {
-            "exec-opts": ["native.cgroupdriver=systemd"],
-            "log-driver": "json-file",
-            "log-opts": {
-              "max-size": "100m"
-            },
-            "storage-driver": "overlay2"
-          }
-        dest: /etc/docker/daemon.json
+          version = 2
+          [plugins."io.containerd.grpc.v1.cri"]
+            [plugins."io.containerd.grpc.v1.cri".containerd]
+              [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+                [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+                  runtime_type = "io.containerd.runc.v2"
+                  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+                    SystemdCgroup = true
+        dest: /etc/containerd/config.toml
         mode: '0644'
-      notify: restart docker
+      notify: restart containerd
 
-    - name: Start and enable Docker
+    - name: Start and enable containerd
       systemd:
-        name: docker
+        name: containerd
         state: started
         enabled: yes
 
   tasks:
-    - name: Install Kubernetes packages
-      apt:
-        name:
-          - kubelet={{ kube_version }}-00
-          - kubeadm={{ kube_version }}-00
-          - kubectl={{ kube_version }}-00
-        state: present
-        update_cache: yes
-      when: ansible_os_family == "Debian"
+    - name: Add Kubernetes repository
+      yum_repository:
+        name: kubernetes
+        description: Kubernetes
+        baseurl: https://pkgs.k8s.io/core:/stable:/v1.28/rpm/
+        gpgkey: https://pkgs.k8s.io/core:/stable:/v1.28/rpm/repodata/repomd.xml.key
+        gpgcheck: yes
+        enabled: yes
+      when: ansible_os_family == "RedHat"
 
-    - name: Hold Kubernetes packages
-      dpkg_selections:
-        name: "{{ item }}"
-        selection: hold
-      loop:
-        - kubelet
-        - kubeadm
-        - kubectl
+    - name: Install Kubernetes packages
+      package:
+        name:
+          - kubelet={{ kube_version }}-1.1
+          - kubeadm={{ kube_version }}-1.1
+          - kubectl={{ kube_version }}-1.1
+        state: present
+      when: ansible_os_family == "RedHat"
 
     - name: Enable kubelet service
       systemd:
@@ -99,9 +129,9 @@
         daemon_reload: yes
 
   handlers:
-    - name: restart docker
+    - name: restart containerd
       systemd:
-        name: docker
+        name: containerd
         state: restarted
 
 - name: Initialize Kubernetes Control Plane

@@ -5,27 +5,27 @@ output "cluster_name" {
 
 output "control_plane_ips" {
   description = "IP addresses of control plane nodes"
-  value       = hcloud_server.control_plane[*].ipv4_address
+  value       = var.control_plane_ips
 }
 
 output "worker_node_ips" {
   description = "IP addresses of worker nodes"
-  value       = hcloud_server.worker_nodes[*].ipv4_address
+  value       = var.worker_node_ips
 }
 
 output "api_server_endpoint" {
-  description = "Load balancer endpoint for Kubernetes API server"
-  value       = hcloud_load_balancer.api_server.ipv4
+  description = "API server endpoint (first control plane node)"
+  value       = var.control_plane_ips[0]
 }
 
-output "ssh_private_key_path" {
-  description = "Path to the SSH private key"
-  value       = local_file.private_key.filename
+output "cluster_ssh_private_key_path" {
+  description = "Path to the cluster SSH private key"
+  value       = local_file.cluster_private_key.filename
 }
 
-output "ssh_public_key_path" {
-  description = "Path to the SSH public key"
-  value       = local_file.public_key.filename
+output "cluster_ssh_public_key_path" {
+  description = "Path to the cluster SSH public key"
+  value       = local_file.cluster_public_key.filename
 }
 
 output "ansible_inventory_path" {
@@ -40,12 +40,12 @@ output "cluster_config_path" {
 
 output "control_plane_names" {
   description = "Names of control plane nodes"
-  value       = hcloud_server.control_plane[*].name
+  value       = [for server in local.control_plane_servers : server.name]
 }
 
 output "worker_node_names" {
   description = "Names of worker nodes"
-  value       = hcloud_server.worker_nodes[*].name
+  value       = [for server in local.worker_servers : server.name]
 }
 
 output "total_nodes" {
@@ -57,11 +57,13 @@ output "cluster_info" {
   description = "Complete cluster information"
   value = {
     name                = var.cluster_name
-    api_endpoint        = hcloud_load_balancer.api_server.ipv4
+    api_endpoint        = var.control_plane_ips[0]
     control_plane_count = var.control_plane_count
     worker_count        = var.worker_node_count
     total_nodes         = var.control_plane_count + var.worker_node_count
     pod_cidr           = var.pod_cidr
     service_cidr       = var.service_cidr
+    ssh_user           = var.ssh_user
+    ssh_port           = var.ssh_port
   }
 }

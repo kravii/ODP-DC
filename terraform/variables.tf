@@ -1,15 +1,3 @@
-variable "hetzner_token" {
-  description = "Hetzner Cloud API token"
-  type        = string
-  sensitive   = true
-}
-
-variable "hetzner_region" {
-  description = "Hetzner Cloud region"
-  type        = string
-  default     = "fsn1"
-}
-
 variable "cluster_name" {
   description = "Name of the Kubernetes cluster"
   type        = string
@@ -22,22 +10,10 @@ variable "control_plane_count" {
   default     = 3
 }
 
-variable "control_plane_type" {
-  description = "Server type for control plane nodes"
-  type        = string
-  default     = "cx31"
-}
-
-variable "control_plane_image" {
-  description = "OS image for control plane nodes"
-  type        = string
-  default     = "ubuntu-22.04"
-}
-
-variable "control_plane_disk_size" {
-  description = "Additional disk size for control plane nodes (GB)"
-  type        = number
-  default     = 40
+variable "control_plane_ips" {
+  description = "IP addresses of existing control plane nodes"
+  type        = list(string)
+  default     = ["10.0.1.10", "10.0.1.11", "10.0.1.12"]
 }
 
 variable "worker_node_count" {
@@ -46,22 +22,28 @@ variable "worker_node_count" {
   default     = 3
 }
 
-variable "worker_node_type" {
-  description = "Server type for worker nodes"
-  type        = string
-  default     = "cx41"
+variable "worker_node_ips" {
+  description = "IP addresses of existing worker nodes"
+  type        = list(string)
+  default     = ["10.0.1.20", "10.0.1.21", "10.0.1.22"]
 }
 
-variable "worker_node_image" {
-  description = "OS image for worker nodes"
+variable "ssh_private_key_path" {
+  description = "Path to existing SSH private key for server access"
   type        = string
-  default     = "ubuntu-22.04"
+  default     = "~/.ssh/id_rsa"
 }
 
-variable "worker_node_disk_size" {
-  description = "Additional disk size for worker nodes (GB)"
+variable "ssh_port" {
+  description = "SSH port for server access"
   type        = number
-  default     = 80
+  default     = 22
+}
+
+variable "ssh_user" {
+  description = "SSH user for server access"
+  type        = string
+  default     = "root"
 }
 
 variable "pod_cidr" {

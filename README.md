@@ -5,7 +5,9 @@ A comprehensive solution for setting up a VM Data Center and Kubernetes cluster 
 ## 🏗️ Architecture Overview
 
 This project provides:
+- **Pre-provisioned Server Support**: Works with existing Rocky Linux 9 baremetal servers
 - **Automated K8s Setup**: High-availability Kubernetes cluster with 3 control plane nodes
+- **SSH Key Management**: Flexible SSH key and port configuration
 - **Resource Pooling**: Unified resource management across all baremetal servers
 - **VM Provisioning**: GUI-based VM creation with multiple OS options
 - **Monitoring**: Comprehensive monitoring with Grafana dashboards
@@ -64,12 +66,22 @@ This project provides:
 
 ## 🛠️ Prerequisites
 
+### Management Machine
 - Terraform >= 1.5.0
 - Ansible >= 2.12.0
 - kubectl >= 1.28.0
 - Helm >= 3.12.0
 - Docker >= 20.10.0
-- Hetzner Cloud API token
+- SSH access to baremetal servers
+
+### Baremetal Servers
+- **Operating System**: Rocky Linux 9 (latest)
+- **CPU**: Minimum 2 cores, recommended 4+ cores
+- **RAM**: Minimum 4GB, recommended 8GB+
+- **Storage**: Minimum 40GB, recommended 100GB+
+- **Network**: Stable network connectivity
+- **Access**: Root or sudo access to all servers
+- **SSH**: SSH access with private key
 
 ## 🚀 Quick Start
 
@@ -82,10 +94,16 @@ This project provides:
 2. **Configure environment**
    ```bash
    cp .env.example .env
-   # Edit .env with your Hetzner API token and configuration
+   # Edit .env with your server IPs and SSH configuration
    ```
 
-3. **Deploy infrastructure**
+3. **Prepare servers** (if not already done)
+   ```bash
+   # Follow the Rocky Linux setup guide
+   # See docs/rocky-linux-setup.md for detailed instructions
+   ```
+
+4. **Configure infrastructure**
    ```bash
    cd terraform
    terraform init
@@ -93,9 +111,10 @@ This project provides:
    terraform apply
    ```
 
-4. **Setup Kubernetes cluster**
+5. **Setup Kubernetes cluster**
    ```bash
    cd ../ansible
+   ansible-playbook -i inventory/hosts.yml playbooks/prepare-servers.yml
    ansible-playbook -i inventory/hosts.yml playbooks/setup-k8s-cluster.yml
    ```
 

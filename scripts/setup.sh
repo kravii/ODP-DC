@@ -198,31 +198,51 @@ setup_python_env() {
     log_success "Python virtual environment setup complete"
 }
 
-# Deploy infrastructure with Terraform
-deploy_infrastructure() {
-    log_info "Deploying infrastructure with Terraform..."
+# Configure existing infrastructure
+configure_infrastructure() {
+    log_info "Configuring existing baremetal servers..."
     
     cd terraform
     
     # Initialize Terraform
     terraform init
     
-    # Plan deployment
-    terraform plan -var="hetzner_token=$HETZNER_API_TOKEN" \
-                   -var="cluster_name=$CLUSTER_NAME" \
-                   -var="control_plane_count=$CONTROL_PLANE_COUNT" \
-                   -var="worker_node_count=$WORKER_NODE_COUNT"
+    # Plan configuration
+    terraform plan -var="cluster_name=$CLUSTER_NAME" \
+                   -var="control_plane_ips=[\"$(echo $CONTROL_PLANE_IPS | tr ',' '\"' | sed 's/,/","/g')\"]" \
+                   -var="worker_node_ips=[\"$(echo $WORKER_NODE_IPS | tr ',' '\"' | sed 's/,/","/g')\"]" \
+                   -var="ssh_private_key_path=$SSH_PRIVATE_KEY_PATH" \
+                   -var="ssh_port=$SSH_PORT" \
+                   -var="ssh_user=$SSH_USER"
     
-    # Apply deployment
+    # Apply configuration
     terraform apply -auto-approve \
-                    -var="hetzner_token=$HETZNER_API_TOKEN" \
                     -var="cluster_name=$CLUSTER_NAME" \
-                    -var="control_plane_count=$CONTROL_PLANE_COUNT" \
-                    -var="worker_node_count=$WORKER_NODE_COUNT"
+                    -var="control_plane_ips=[\"$(echo $CONTROL_PLANE_IPS | tr ',' '\"' | sed 's/,/","/g')\"]" \
+                    -var="worker_node_ips=[\"$(echo $WORKER_NODE_IPS | tr ',' '\"' | sed 's/,/","/g')\"]" \
+                    -var="ssh_private_key_path=$SSH_PRIVATE_KEY_PATH" \
+                    -var="ssh_port=$SSH_PORT" \
+                    -var="ssh_user=$SSH_USER"
     
     cd ..
     
-    log_success "Infrastructure deployed successfully"
+    log_success "Infrastructure configuration completed"
+}
+
+# Prepare servers for Kubernetes
+prepare_servers() {
+    log_info "Preparing Rocky Linux 9 servers for Kubernetes..."
+    
+    cd ansible
+    
+    # Run server preparation playbook
+    ansible-playbook -i inventory/hosts.yml playbooks/prepare-servers.yml \
+                     -e "cluster_ssh_user=$SSH_USER" \
+                     -e "cluster_ssh_port=$SSH_PORT"
+    
+    cd ..
+    
+    log_success "Server preparation complete"
 }
 
 # Setup Kubernetes cluster with Ansible
@@ -384,8 +404,11 @@ main() {
     # Setup Python environment
     setup_python_env
     
-    # Deploy infrastructure
-    deploy_infrastructure
+    # Configure existing infrastructure
+    configure_infrastructure
+    
+    # Prepare servers
+    prepare_servers
     
     # Setup Kubernetes
     setup_kubernetes

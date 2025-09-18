@@ -1,10 +1,6 @@
 terraform {
   required_version = ">= 1.5.0"
   required_providers {
-    hcloud = {
-      source  = "hetznercloud/hcloud"
-      version = "~> 1.42.0"
-    }
     local = {
       source  = "hashicorp/local"
       version = "~> 2.4.0"
@@ -16,127 +12,65 @@ terraform {
   }
 }
 
-# Configure the Hetzner Cloud Provider
-provider "hcloud" {
-  token = var.hetzner_token
+# Data source for existing baremetal servers
+# This assumes servers are already provisioned and accessible
+locals {
+  # Define your existing baremetal servers here
+  control_plane_servers = [
+    {
+      name = "${var.cluster_name}-cp-1"
+      ip   = var.control_plane_ips[0]
+      role = "control-plane"
+    },
+    {
+      name = "${var.cluster_name}-cp-2"
+      ip   = var.control_plane_ips[1]
+      role = "control-plane"
+    },
+    {
+      name = "${var.cluster_name}-cp-3"
+      ip   = var.control_plane_ips[2]
+      role = "control-plane"
+    }
+  ]
+  
+  worker_servers = [
+    for i in range(var.worker_node_count) : {
+      name = "${var.cluster_name}-worker-${i + 1}"
+      ip   = var.worker_node_ips[i]
+      role = "worker"
+    }
+  ]
+  
+  all_servers = concat(local.control_plane_servers, local.worker_servers)
 }
 
-# Generate SSH key pair
-resource "tls_private_key" "ssh_key" {
+# Generate SSH key pair for cluster management
+resource "tls_private_key" "cluster_ssh_key" {
   algorithm = "RSA"
   rsa_bits  = 4096
 }
 
-resource "hcloud_ssh_key" "default" {
-  name       = "${var.cluster_name}-ssh-key"
-  public_key = tls_private_key.ssh_key.public_key_openssh
-}
-
 # Save private key to local file
-resource "local_file" "private_key" {
-  content  = tls_private_key.ssh_key.private_key_pem
-  filename = "${path.module}/../ansible/ssh_keys/${var.cluster_name}-private-key.pem"
+resource "local_file" "cluster_private_key" {
+  content  = tls_private_key.cluster_ssh_key.private_key_pem
+  filename = "${path.module}/../ansible/ssh_keys/${var.cluster_name}-cluster-key.pem"
   file_permission = "0600"
 }
 
-resource "local_file" "public_key" {
-  content  = tls_private_key.ssh_key.public_key_openssh
-  filename = "${path.module}/../ansible/ssh_keys/${var.cluster_name}-public-key.pub"
+resource "local_file" "cluster_public_key" {
+  content  = tls_private_key.cluster_ssh_key.public_key_openssh
+  filename = "${path.module}/../ansible/ssh_keys/${var.cluster_name}-cluster-key.pub"
 }
 
-# Control Plane Nodes
-resource "hcloud_server" "control_plane" {
-  count       = var.control_plane_count
-  name        = "${var.cluster_name}-cp-${count.index + 1}"
-  image       = var.control_plane_image
-  server_type = var.control_plane_type
-  location    = var.hetzner_region
-  ssh_keys    = [hcloud_ssh_key.default.id]
-  
-  labels = {
-    role = "control-plane"
-    node = "cp-${count.index + 1}"
-  }
-
-  # Additional disk for data
-  additional_volumes = [hcloud_volume.control_plane_data[count.index].id]
-
-  user_data = templatefile("${path.module}/templates/control-plane-userdata.yaml", {
-    cluster_name = var.cluster_name
-    node_index   = count.index + 1
-    pod_cidr     = var.pod_cidr
-    service_cidr = var.service_cidr
+# Create load balancer configuration for API server
+resource "local_file" "load_balancer_config" {
+  content = templatefile("${path.module}/templates/load-balancer-config.tpl", {
+    cluster_name        = var.cluster_name
+    control_plane_ips   = var.control_plane_ips
+    api_server_port     = 6443
   })
-}
-
-# Control Plane Data Volumes
-resource "hcloud_volume" "control_plane_data" {
-  count    = var.control_plane_count
-  name     = "${var.cluster_name}-cp-data-${count.index + 1}"
-  size     = var.control_plane_disk_size
-  location = var.hetzner_region
-}
-
-# Worker Nodes
-resource "hcloud_server" "worker_nodes" {
-  count       = var.worker_node_count
-  name        = "${var.cluster_name}-worker-${count.index + 1}"
-  image       = var.worker_node_image
-  server_type = var.worker_node_type
-  location    = var.hetzner_region
-  ssh_keys    = [hcloud_ssh_key.default.id]
-  
-  labels = {
-    role = "worker"
-    node = "worker-${count.index + 1}"
-  }
-
-  # Additional disk for data
-  additional_volumes = [hcloud_volume.worker_data[count.index].id]
-
-  user_data = templatefile("${path.module}/templates/worker-userdata.yaml", {
-    cluster_name = var.cluster_name
-    node_index   = count.index + 1
-    pod_cidr     = var.pod_cidr
-    service_cidr = var.service_cidr
-  })
-}
-
-# Worker Data Volumes
-resource "hcloud_volume" "worker_data" {
-  count    = var.worker_node_count
-  name     = "${var.cluster_name}-worker-data-${count.index + 1}"
-  size     = var.worker_node_disk_size
-  location = var.hetzner_region
-}
-
-# Load Balancer for API Server
-resource "hcloud_load_balancer" "api_server" {
-  name     = "${var.cluster_name}-api-lb"
-  load_balancer_type = "lb11"
-  location = var.hetzner_region
-  
-  labels = {
-    role = "api-server-lb"
-  }
-}
-
-resource "hcloud_load_balancer_target" "api_server_targets" {
-  count            = var.control_plane_count
-  type             = "server"
-  load_balancer_id = hcloud_load_balancer.api_server.id
-  server_id        = hcloud_server.control_plane[count.index].id
-}
-
-resource "hcloud_load_balancer_service" "api_server_service" {
-  load_balancer_id = hcloud_load_balancer.api_server.id
-  protocol         = "tcp"
-  listen_port      = 6443
-  destination_port = 6443
-  health_check {
-    protocol = "tcp"
-    port     = 6443
-  }
+  filename = "${path.module}/../ansible/group_vars/all/load-balancer.yml"
 }
 
 # Generate Ansible inventory

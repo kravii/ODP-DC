@@ -1,0 +1,169 @@
+---
+- name: Manage SSH Keys on Rocky Linux 9 Servers
+  hosts: kubernetes_cluster
+  become: yes
+  gather_facts: yes
+  vars:
+    new_ssh_port: "{{ ssh_port | default(22) }}"
+    new_ssh_user: "{{ ssh_user | default('root') }}"
+    new_ssh_private_key: "{{ ssh_private_key_path | default('~/.ssh/id_rsa') }}"
+    backup_existing_keys: true
+
+  tasks:
+    - name: Backup existing SSH configuration
+      block:
+        - name: Create backup directory
+          file:
+            path: /etc/ssh/backup
+            state: directory
+            mode: '0700'
+
+        - name: Backup SSH configuration
+          copy:
+            src: /etc/ssh/sshd_config
+            dest: /etc/ssh/backup/sshd_config.backup.{{ ansible_date_time.epoch }}
+            remote_src: yes
+            mode: '0600'
+
+        - name: Backup authorized_keys if exists
+          copy:
+            src: "/home/{{ new_ssh_user }}/.ssh/authorized_keys"
+            dest: "/etc/ssh/backup/authorized_keys.backup.{{ ansible_date_time.epoch }}"
+            remote_src: yes
+            mode: '0600'
+          ignore_errors: yes
+
+      when: backup_existing_keys
+
+    - name: Generate new SSH key pair if not exists
+      block:
+        - name: Check if SSH key exists
+          stat:
+            path: "{{ new_ssh_private_key }}"
+          register: ssh_key_stat
+
+        - name: Generate SSH key pair
+          openssh_keypair:
+            path: "{{ new_ssh_private_key }}"
+            type: rsa
+            size: 4096
+            comment: "{{ new_ssh_user }}@{{ inventory_hostname }}"
+          when: not ssh_key_stat.stat.exists
+
+    - name: Configure SSH daemon
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        backup: yes
+      loop:
+        - { regexp: '^#?Port', line: 'Port {{ new_ssh_port }}' }
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin yes' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+        - { regexp: '^#?AuthorizedKeysFile', line: 'AuthorizedKeysFile .ssh/authorized_keys' }
+        - { regexp: '^#?StrictModes', line: 'StrictModes yes' }
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+      notify: restart sshd
+
+    - name: Update firewalld for new SSH port
+      firewalld:
+        port: "{{ new_ssh_port }}/tcp"
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Remove old SSH port from firewalld if different
+      firewalld:
+        port: "22/tcp"
+        permanent: yes
+        state: disabled
+        immediate: yes
+      when: new_ssh_port != "22"
+
+    - name: Create SSH user if not exists
+      user:
+        name: "{{ new_ssh_user }}"
+        state: present
+        shell: /bin/bash
+        create_home: yes
+        groups: wheel
+        append: yes
+
+    - name: Create .ssh directory for user
+      file:
+        path: "/home/{{ new_ssh_user }}/.ssh"
+        state: directory
+        owner: "{{ new_ssh_user }}"
+        group: "{{ new_ssh_user }}"
+        mode: '0700'
+
+    - name: Copy SSH public key to authorized_keys
+      copy:
+        src: "{{ new_ssh_private_key }}.pub"
+        dest: "/home/{{ new_ssh_user }}/.ssh/authorized_keys"
+        owner: "{{ new_ssh_user }}"
+        group: "{{ new_ssh_user }}"
+        mode: '0600'
+        remote_src: yes
+
+    - name: Configure sudo for SSH user
+      lineinfile:
+        path: /etc/sudoers.d/{{ new_ssh_user }}
+        line: "{{ new_ssh_user }} ALL=(ALL) NOPASSWD:ALL"
+        state: present
+        create: yes
+        mode: '0440'
+
+    - name: Test SSH connection with new configuration
+      wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: "{{ new_ssh_port }}"
+        timeout: 30
+      delegate_to: localhost
+      run_once: true
+
+    - name: Display SSH configuration summary
+      debug:
+        msg: |
+          SSH Configuration Updated:
+          - Server: {{ inventory_hostname }}
+          - SSH Port: {{ new_ssh_port }}
+          - SSH User: {{ new_ssh_user }}
+          - SSH Key: {{ new_ssh_private_key }}
+          - Firewall: Updated for new port
+          - Backup: Created in /etc/ssh/backup/
+
+  handlers:
+    - name: restart sshd
+      systemd:
+        name: sshd
+        state: restarted
+
+- name: Update Ansible inventory with new SSH configuration
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Update inventory file
+      lineinfile:
+        path: "{{ inventory_file | default('inventory/hosts.yml') }}"
+        regexp: "ansible_port: .*"
+        line: "ansible_port: {{ new_ssh_port }}"
+        state: present
+
+    - name: Update SSH user in inventory
+      lineinfile:
+        path: "{{ inventory_file | default('inventory/hosts.yml') }}"
+        regexp: "ansible_user: .*"
+        line: "ansible_user: {{ new_ssh_user }}"
+        state: present
+
+    - name: Update SSH key path in inventory
+      lineinfile:
+        path: "{{ inventory_file | default('inventory/hosts.yml') }}"
+        regexp: "ansible_ssh_private_key_file: .*"
+        line: "ansible_ssh_private_key_file: {{ new_ssh_private_key }}"
+        state: present
