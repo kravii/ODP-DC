@@ -1,0 +1,589 @@
+---
+# Enhanced VM Provisioner with Shared Storage Integration
+# Uses 1.8TB RAID storage for VM provisioning
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vm-system
+  labels:
+    name: vm-system
+    purpose: vm-provisioning
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vm-provisioner
+  namespace: vm-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vm-provisioner
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "events", "configmaps", "secrets"]
+  verbs: ["*"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "replicasets", "statefulsets"]
+  verbs: ["*"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["servicemonitors"]
+  verbs: ["get", "create"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list", "get", "watch"]
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vm-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vm-provisioner
+subjects:
+- kind: ServiceAccount
+  name: vm-provisioner
+  namespace: vm-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-provisioner
+  namespace: vm-system
+  labels:
+    app: vm-provisioner
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vm-provisioner
+  template:
+    metadata:
+      labels:
+        app: vm-provisioner
+    spec:
+      serviceAccountName: vm-provisioner
+      containers:
+      - name: vm-provisioner
+        image: vm-provisioner:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: vm-provisioner-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: vm-provisioner-secrets
+              key: redis-url
+        - name: HETZNER_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vm-provisioner-secrets
+              key: hetzner-api-token
+        - name: SSH_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vm-provisioner-secrets
+              key: ssh-private-key
+        - name: SHARED_STORAGE_PATH
+          value: "/shared-storage"
+        - name: VM_STORAGE_PATH
+          value: "/shared-storage/vm-storage"
+        - name: STORAGE_TOTAL_SIZE
+          value: "1800"
+        - name: VM_STORAGE_LIMIT
+          value: "1000"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: vm-templates
+          mountPath: /app/templates
+        - name: vm-config
+          mountPath: /app/config
+        - name: shared-storage
+          mountPath: /shared-storage
+        - name: vm-storage
+          mountPath: /shared-storage/vm-storage
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: vm-templates
+        configMap:
+          name: vm-templates
+      - name: vm-config
+        configMap:
+          name: vm-config
+      - name: shared-storage
+        hostPath:
+          path: /
+      - name: vm-storage
+        hostPath:
+          path: /
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm-provisioner-service
+  namespace: vm-system
+spec:
+  selector:
+    app: vm-provisioner
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vm-templates
+  namespace: vm-system
+data:
+  centos7.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-img
+      - libvirt
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+  rhel7.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-img
+      - libvirt
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+  rhel8.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-img
+      - libvirt
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+  rhel9.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-img
+      - libvirt
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+  rockylinux9.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-img
+      - libvirt
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+  ubuntu20.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-utils
+      - libvirt-daemon-system
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable ssh
+      - systemctl start ssh
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+  ubuntu22.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-utils
+      - libvirt-daemon-system
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable ssh
+      - systemctl start ssh
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+  ubuntu24.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-utils
+      - libvirt-daemon-system
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable ssh
+      - systemctl start ssh
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+  oel8.yaml: |
+    #cloud-config
+    package_update: true
+    package_upgrade: true
+    packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - qemu-img
+      - libvirt
+    users:
+      - name: acceldata
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc
+    runcmd:
+      - systemctl enable sshd
+      - systemctl start sshd
+      - mkdir -p /shared-storage/vm-storage/instances
+      - chmod 755 /shared-storage/vm-storage/instances
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vm-config
+  namespace: vm-system
+data:
+  config.yaml: |
+    vm:
+      max_count: 300
+      ip_range: "192.168.100.0/24"
+      default_user: "acceldata"
+      default_ssh_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... acceldata@hetzner-dc"
+      storage:
+        root_path: "/shared-storage/vm-storage"
+        max_size_gb: 1000
+        default_size_gb: 50
+        image_format: "qcow2"
+    hetzner:
+      region: "fsn1"
+      server_types:
+        - "cx11"
+        - "cx21"
+        - "cx31"
+        - "cx41"
+        - "cx51"
+      images:
+        centos7: "centos-7"
+        rhel7: "rhel-7"
+        rhel8: "rhel-8"
+        rhel9: "rhel-9"
+        rockylinux9: "rocky-9"
+        ubuntu20: "ubuntu-20.04"
+        ubuntu22: "ubuntu-22.04"
+        ubuntu24: "ubuntu-24.04"
+        oel8: "oracle-linux-8"
+    storage:
+      shared_path: "/shared-storage"
+      vm_path: "/shared-storage/vm-storage"
+      total_size_gb: 1800
+      vm_allocation_gb: 1000
+      k8s_allocation_gb: 500
+      monitoring_allocation_gb: 200
+      backup_allocation_gb: 80
+      log_allocation_gb: 20
+---
+# VM Storage Manager DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vm-storage-manager
+  namespace: vm-system
+spec:
+  selector:
+    matchLabels:
+      app: vm-storage-manager
+  template:
+    metadata:
+      labels:
+        app: vm-storage-manager
+    spec:
+      containers:
+      - name: vm-storage-manager
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Install required packages
+          apk add --no-cache qemu-img bc
+          
+          # Function to get storage usage
+          get_storage_usage() {
+            local path="$1"
+            if [ -d "$path" ]; then
+              du -s "$path" 2>/dev/null | awk '{print $1}' || echo "0"
+            else
+              echo "0"
+            fi
+          }
+          
+          # Function to convert KB to GB
+          kb_to_gb() {
+            local kb="$1"
+            echo "scale=2; $kb / 1024 / 1024" | bc
+          }
+          
+          # Monitor storage usage
+          while true; do
+            echo "=== VM Storage Usage Report $(date) ==="
+            
+            # Get VM storage usage
+            vm_usage_kb=$(get_storage_usage "/shared-storage/vm-storage")
+            vm_usage_gb=$(kb_to_gb "$vm_usage_kb")
+            
+            echo "VM Storage Usage: ${vm_usage_gb}GB / 1000GB"
+            
+            # Check if approaching limit
+            if (( $(echo "$vm_usage_gb > 900" | bc -l) )); then
+              echo "WARNING: VM storage usage is ${vm_usage_gb}GB (limit: 1000GB)"
+            fi
+            
+            # Get individual VM sizes
+            echo "Individual VM Sizes:"
+            for vm_dir in /shared-storage/vm-storage/instances/*; do
+              if [ -d "$vm_dir" ]; then
+                vm_id=$(basename "$vm_dir")
+                vm_size_kb=$(get_storage_usage "$vm_dir")
+                vm_size_gb=$(kb_to_gb "$vm_size_kb")
+                echo "  VM $vm_id: ${vm_size_gb}GB"
+              fi
+            done
+            
+            # Check for orphaned VM files
+            echo "Checking for orphaned VM files..."
+            find /shared-storage/vm-storage/instances -name "*.qcow2" -mtime +7 -exec ls -la {} \;
+            
+            echo "VM Storage monitoring completed"
+            echo "================================"
+            sleep 300  # Check every 5 minutes
+          done
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /shared-storage
+      volumes:
+      - name: shared-storage
+        hostPath:
+          path: /
+---
+# VM Storage Cleanup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vm-storage-cleanup
+  namespace: vm-system
+spec:
+  schedule: "0 3 * * *"  # Run daily at 3 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: cleanup
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Install required packages
+              apk add --no-cache qemu-img
+              
+              echo "Starting VM storage cleanup..."
+              
+              # Clean up old VM snapshots (older than 90 days)
+              find /shared-storage/vm-storage/snapshots -type f -mtime +90 -delete 2>/dev/null || true
+              echo "Cleaned up old VM snapshots"
+              
+              # Clean up orphaned VM files
+              find /shared-storage/vm-storage/instances -name "*.qcow2" -mtime +7 -exec rm -f {} \; 2>/dev/null || true
+              echo "Cleaned up orphaned VM files"
+              
+              # Clean up temporary VM files
+              find /shared-storage/vm-storage -name "*.tmp" -delete 2>/dev/null || true
+              find /shared-storage/vm-storage -name "*.temp" -delete 2>/dev/null || true
+              echo "Cleaned up temporary VM files"
+              
+              # Optimize VM disk images
+              echo "Optimizing VM disk images..."
+              for qcow_file in /shared-storage/vm-storage/instances/*/*.qcow2; do
+                if [ -f "$qcow_file" ]; then
+                  echo "Optimizing: $qcow_file"
+                  qemu-img convert -O qcow2 -c "$qcow_file" "${qcow_file}.optimized" 2>/dev/null || true
+                  if [ -f "${qcow_file}.optimized" ]; then
+                    mv "${qcow_file}.optimized" "$qcow_file"
+                  fi
+                fi
+              done
+              
+              echo "VM storage cleanup completed"
+            volumeMounts:
+            - name: shared-storage
+              mountPath: /shared-storage
+          volumes:
+          - name: shared-storage
+            hostPath:
+              path: /
+          restartPolicy: OnFailure
+---
+# Example VM Storage Persistent Volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vm-storage-pv
+spec:
+  capacity:
+    storage: 1000Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: vm-storage
+  hostPath:
+    path: /shared-storage/vm-storage
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: vm-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+allowedTopologies:
+- matchLabelExpressions:
+  - key: kubernetes.io/hostname
+    values: ["*"]
