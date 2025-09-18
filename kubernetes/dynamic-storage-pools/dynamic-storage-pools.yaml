@@ -1,0 +1,624 @@
+---
+# Dynamic Storage Pools Configuration
+# Each server contributes 1.5TB to its respective pool (K8s or VM)
+# Storage pools grow/shrink dynamically as servers are added/removed
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dynamic-storage-pools
+  labels:
+    name: dynamic-storage-pools
+    purpose: dynamic-storage-management
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dynamic-storage-config
+  namespace: dynamic-storage-pools
+data:
+  storage-info: |
+    # Dynamic Storage Pools Configuration
+    # Each server contributes 1.5TB to its assigned pool
+    # No further subdivision - entire 1.5TB goes to the pool
+    
+    # K8s Pool: All K8s servers contribute 1.5TB each
+    # VM Pool: All VM servers contribute 1.5TB each
+    # System Reserve: 300GB per server for OS operations
+    
+    # Pool Scaling:
+    # - Add server to K8s pool → +1.5TB to K8s pool
+    # - Add server to VM pool → +1.5TB to VM pool
+    # - Remove server from pool → -1.5TB from pool
+  pool-config: |
+    k8s_pool:
+      name: "k8s-storage-pool"
+      storage_per_server_gb: 1500
+      path: "/k8s-storage-pool"
+      owner: "1000:1000"
+      description: "Dynamic K8s storage pool"
+    
+    vm_pool:
+      name: "vm-storage-pool"
+      storage_per_server_gb: 1500
+      path: "/vm-storage-pool"
+      owner: "1001:1001"
+      description: "Dynamic VM storage pool"
+    
+    system_reserve:
+      storage_per_server_gb: 300
+      path: "/system-reserve"
+      owner: "root:root"
+      description: "System reserve per server"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-dynamic-storage-pools
+  namespace: dynamic-storage-pools
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: setup-storage
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Install required packages
+          apk add --no-cache qemu-img
+          
+          # Create dynamic storage pool directories
+          mkdir -p /k8s-storage-pool
+          mkdir -p /vm-storage-pool
+          mkdir -p /system-reserve
+          
+          # Set permissions
+          chmod -R 755 /k8s-storage-pool
+          chmod -R 755 /vm-storage-pool
+          chmod -R 755 /system-reserve
+          
+          # Set ownership for K8s pool
+          chown -R 1000:1000 /k8s-storage-pool
+          
+          # Set ownership for VM pool
+          chown -R 1001:1001 /vm-storage-pool
+          
+          # Set ownership for system reserve
+          chown -R root:root /system-reserve
+          
+          # Create VM templates in VM pool
+          echo "Creating VM templates in VM pool..."
+          qemu-img create -f qcow2 /vm-storage-pool/ubuntu22.qcow2 20G
+          qemu-img create -f qcow2 /vm-storage-pool/centos7.qcow2 20G
+          qemu-img create -f qcow2 /vm-storage-pool/rhel8.qcow2 20G
+          qemu-img create -f qcow2 /vm-storage-pool/rockylinux9.qcow2 20G
+          
+          # Create dynamic pool configuration
+          cat > /k8s-storage-pool/pool-config.yaml << 'EOF'
+          dynamic_storage_pools:
+            k8s_pool:
+              name: "k8s-storage-pool"
+              storage_per_server_gb: 1500
+              path: "/k8s-storage-pool"
+              owner: "1000:1000"
+              servers: []
+              total_capacity_gb: 0
+              used_capacity_gb: 0
+              available_capacity_gb: 0
+            
+            vm_pool:
+              name: "vm-storage-pool"
+              storage_per_server_gb: 1500
+              path: "/vm-storage-pool"
+              owner: "1001:1001"
+              servers: []
+              total_capacity_gb: 0
+              used_capacity_gb: 0
+              available_capacity_gb: 0
+          EOF
+          
+          cat > /vm-storage-pool/pool-config.yaml << 'EOF'
+          dynamic_storage_pools:
+            k8s_pool:
+              name: "k8s-storage-pool"
+              storage_per_server_gb: 1500
+              path: "/k8s-storage-pool"
+              owner: "1000:1000"
+              servers: []
+              total_capacity_gb: 0
+              used_capacity_gb: 0
+              available_capacity_gb: 0
+            
+            vm_pool:
+              name: "vm-storage-pool"
+              storage_per_server_gb: 1500
+              path: "/vm-storage-pool"
+              owner: "1001:1001"
+              servers: []
+              total_capacity_gb: 0
+              used_capacity_gb: 0
+              available_capacity_gb: 0
+          EOF
+          
+          # Create pool monitoring script
+          cat > /k8s-storage-pool/monitor-pools.sh << 'EOF'
+          #!/bin/sh
+          echo "=== Dynamic Storage Pools Report $(date) ==="
+          echo ""
+          
+          # Get K8s pool usage
+          k8s_usage=$(du -s /k8s-storage-pool 2>/dev/null | awk '{print $1}')
+          k8s_usage_gb=$((k8s_usage / 1024 / 1024))
+          
+          # Get VM pool usage
+          vm_usage=$(du -s /vm-storage-pool 2>/dev/null | awk '{print $1}')
+          vm_usage_gb=$((vm_usage / 1024 / 1024))
+          
+          # Count servers in each pool
+          k8s_servers=$(kubectl get nodes -l pool=k8s --no-headers 2>/dev/null | wc -l)
+          vm_servers=$(kubectl get nodes -l pool=vm --no-headers 2>/dev/null | wc -l)
+          
+          # Calculate pool capacities
+          k8s_total_capacity=$((k8s_servers * 1500))
+          vm_total_capacity=$((vm_servers * 1500))
+          
+          k8s_available_capacity=$((k8s_total_capacity - k8s_usage_gb))
+          vm_available_capacity=$((vm_total_capacity - vm_usage_gb))
+          
+          echo "K8s Storage Pool:"
+          echo "  Servers: $k8s_servers"
+          echo "  Total Capacity: ${k8s_total_capacity}GB"
+          echo "  Used: ${k8s_usage_gb}GB"
+          echo "  Available: ${k8s_available_capacity}GB"
+          echo ""
+          
+          echo "VM Storage Pool:"
+          echo "  Servers: $vm_servers"
+          echo "  Total Capacity: ${vm_total_capacity}GB"
+          echo "  Used: ${vm_usage_gb}GB"
+          echo "  Available: ${vm_available_capacity}GB"
+          echo ""
+          
+          echo "Pool Health:"
+          if [ $k8s_available_capacity -lt 150 ]; then
+            echo "  WARNING: K8s pool low on space (${k8s_available_capacity}GB remaining)"
+          else
+            echo "  OK: K8s pool has sufficient space (${k8s_available_capacity}GB remaining)"
+          fi
+          
+          if [ $vm_available_capacity -lt 150 ]; then
+            echo "  WARNING: VM pool low on space (${vm_available_capacity}GB remaining)"
+          else
+            echo "  OK: VM pool has sufficient space (${vm_available_capacity}GB remaining)"
+          fi
+          
+          echo "Dynamic pool monitoring completed"
+          EOF
+          
+          chmod +x /k8s-storage-pool/monitor-pools.sh
+          
+          echo "Dynamic storage pools setup completed"
+        volumeMounts:
+        - name: k8s-storage-pool
+          mountPath: /k8s-storage-pool
+        - name: vm-storage-pool
+          mountPath: /vm-storage-pool
+        - name: system-reserve
+          mountPath: /system-reserve
+      volumes:
+      - name: k8s-storage-pool
+        hostPath:
+          path: /
+      - name: vm-storage-pool
+        hostPath:
+          path: /
+      - name: system-reserve
+        hostPath:
+          path: /
+---
+# K8s Pool Storage Provisioner
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-pool-provisioner-service-account
+  namespace: dynamic-storage-pools
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-pool-provisioner-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "persistentvolumes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "update", "patch"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-pool-provisioner-bind
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8s-pool-provisioner-role
+subjects:
+- kind: ServiceAccount
+  name: k8s-pool-provisioner-service-account
+  namespace: dynamic-storage-pools
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-pool-provisioner
+  namespace: dynamic-storage-pools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-pool-provisioner
+  template:
+    metadata:
+      labels:
+        app: k8s-pool-provisioner
+    spec:
+      serviceAccountName: k8s-pool-provisioner-service-account
+      nodeSelector:
+        pool: k8s  # Only run on K8s pool nodes
+      containers:
+      - name: k8s-pool-provisioner
+        image: rancher/local-path-provisioner:v0.0.24
+        imagePullPolicy: IfNotPresent
+        command:
+        - local-path-provisioner
+        - start
+        - --config
+        - /etc/config/config.json
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/config/
+        - name: storage-path
+          mountPath: /opt/local-path-provisioner
+        - name: k8s-storage-pool
+          mountPath: /k8s-storage-pool
+      volumes:
+      - name: config-volume
+        configMap:
+          name: k8s-pool-config
+      - name: storage-path
+        hostPath:
+          path: /opt/local-path-provisioner
+      - name: k8s-storage-pool
+        hostPath:
+          path: /
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-pool-config
+  namespace: dynamic-storage-pools
+data:
+  config.json: |
+    {
+      "nodePathMap":[
+      {
+        "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
+        "paths": ["/k8s-storage-pool"]
+      }
+      ]
+    }
+---
+# VM Pool Storage Manager
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vm-pool-storage-manager
+  namespace: dynamic-storage-pools
+spec:
+  selector:
+    matchLabels:
+      app: vm-pool-storage-manager
+  template:
+    metadata:
+      labels:
+        app: vm-pool-storage-manager
+    spec:
+      nodeSelector:
+        pool: vm  # Only run on VM pool nodes
+      containers:
+      - name: vm-pool-storage-manager
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Install required packages
+          apk add --no-cache qemu-img bc
+          
+          # Function to get storage usage
+          get_storage_usage() {
+            local path="$1"
+            if [ -d "$path" ]; then
+              du -s "$path" 2>/dev/null | awk '{print $1}' || echo "0"
+            else
+              echo "0"
+            fi
+          }
+          
+          # Function to convert KB to GB
+          kb_to_gb() {
+            local kb="$1"
+            echo "scale=2; $kb / 1024 / 1024" | bc
+          }
+          
+          # Monitor VM pool storage usage
+          while true; do
+            echo "=== VM Pool Storage Report $(date) ==="
+            
+            # Get VM pool usage
+            vm_usage_kb=$(get_storage_usage "/vm-storage-pool")
+            vm_usage_gb=$(kb_to_gb "$vm_usage_kb")
+            
+            # Count VM pool servers
+            vm_servers=$(kubectl get nodes -l pool=vm --no-headers 2>/dev/null | wc -l)
+            vm_total_capacity=$((vm_servers * 1500))
+            vm_available_capacity=$((vm_total_capacity - vm_usage_gb))
+            
+            echo "VM Pool Storage:"
+            echo "  Servers: $vm_servers"
+            echo "  Total Capacity: ${vm_total_capacity}GB"
+            echo "  Used: ${vm_usage_gb}GB"
+            echo "  Available: ${vm_available_capacity}GB"
+            echo ""
+            
+            # Check if approaching limit
+            if [ $vm_available_capacity -lt 150 ]; then
+              echo "WARNING: VM pool low on space (${vm_available_capacity}GB remaining)"
+            else
+              echo "OK: VM pool has sufficient space (${vm_available_capacity}GB remaining)"
+            fi
+            
+            # List VM instances
+            echo "VM Instances:"
+            ls -la /vm-storage-pool/ | grep -E "\.qcow2$" || echo "  No VM instances found"
+            
+            # List VM templates
+            echo "VM Templates:"
+            ls -la /vm-storage-pool/ | grep -E "(ubuntu|centos|rhel|rocky)" || echo "  No VM templates found"
+            
+            echo "VM pool storage monitoring completed"
+            echo "====================================="
+            sleep 300  # Check every 5 minutes
+          done
+        volumeMounts:
+        - name: vm-storage-pool
+          mountPath: /vm-storage-pool
+      volumes:
+      - name: vm-storage-pool
+        hostPath:
+          path: /
+---
+# Dynamic Pool Monitor
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dynamic-pool-monitor
+  namespace: dynamic-storage-pools
+spec:
+  selector:
+    matchLabels:
+      app: dynamic-pool-monitor
+  template:
+    metadata:
+      labels:
+        app: dynamic-pool-monitor
+    spec:
+      containers:
+      - name: dynamic-pool-monitor
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            echo "=== Dynamic Pool Monitor $(date) ==="
+            
+            # Run pool monitoring script
+            /k8s-storage-pool/monitor-pools.sh
+            
+            echo "Dynamic pool monitoring completed"
+            echo "==============================="
+            sleep 300  # Check every 5 minutes
+          done
+        volumeMounts:
+        - name: k8s-storage-pool
+          mountPath: /k8s-storage-pool
+      volumes:
+      - name: k8s-storage-pool
+        hostPath:
+          path: /
+---
+# K8s Pool Storage Class
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: k8s-pool-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowedTopologies:
+- matchLabelExpressions:
+  - key: pool
+    values: ["k8s"]
+parameters:
+  path: "/k8s-storage-pool"
+---
+# VM Pool Storage Class
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: vm-pool-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+allowedTopologies:
+- matchLabelExpressions:
+  - key: pool
+    values: ["vm"]
+---
+# Pool Scaling Controller
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pool-scaling-controller
+  namespace: dynamic-storage-pools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pool-scaling-controller
+  template:
+    metadata:
+      labels:
+        app: pool-scaling-controller
+    spec:
+      containers:
+      - name: pool-scaling-controller
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            echo "=== Pool Scaling Controller $(date) ==="
+            
+            # Count servers in each pool
+            k8s_servers=$(kubectl get nodes -l pool=k8s --no-headers 2>/dev/null | wc -l)
+            vm_servers=$(kubectl get nodes -l pool=vm --no-headers 2>/dev/null | wc -l)
+            
+            # Calculate pool capacities
+            k8s_total_capacity=$((k8s_servers * 1500))
+            vm_total_capacity=$((vm_servers * 1500))
+            
+            echo "Pool Scaling Status:"
+            echo "  K8s Pool: $k8s_servers servers → ${k8s_total_capacity}GB total capacity"
+            echo "  VM Pool: $vm_servers servers → ${vm_total_capacity}GB total capacity"
+            echo ""
+            
+            # Update pool configurations
+            kubectl patch configmap dynamic-storage-config -n dynamic-storage-pools --type merge -p "{\"data\":{\"pool-status\":\"K8s Pool: $k8s_servers servers (${k8s_total_capacity}GB), VM Pool: $vm_servers servers (${vm_total_capacity}GB)\"}}"
+            
+            echo "Pool scaling controller completed"
+            echo "================================="
+            sleep 60  # Check every minute
+          done
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+---
+# Pool Cleanup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pool-cleanup
+  namespace: dynamic-storage-pools
+spec:
+  schedule: "0 2 * * *"  # Run daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: cleanup
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting dynamic pool cleanup..."
+              
+              # Clean up K8s pool
+              echo "Cleaning up K8s pool..."
+              find /k8s-storage-pool -name "*.tmp" -delete 2>/dev/null || true
+              find /k8s-storage-pool -name "*.temp" -delete 2>/dev/null || true
+              find /k8s-storage-pool -name "*.log" -mtime +7 -delete 2>/dev/null || true
+              
+              # Clean up VM pool
+              echo "Cleaning up VM pool..."
+              find /vm-storage-pool -name "*.tmp" -delete 2>/dev/null || true
+              find /vm-storage-pool -name "*.temp" -delete 2>/dev/null || true
+              find /vm-storage-pool -name "*.log" -mtime +7 -delete 2>/dev/null || true
+              
+              # Clean up orphaned VM files
+              find /vm-storage-pool -name "*.qcow2" -mtime +7 -exec rm -f {} \; 2>/dev/null || true
+              
+              # Optimize VM disk images
+              echo "Optimizing VM disk images..."
+              for qcow_file in /vm-storage-pool/*.qcow2; do
+                if [ -f "$qcow_file" ]; then
+                  echo "Optimizing: $qcow_file"
+                  qemu-img convert -O qcow2 -c "$qcow_file" "${qcow_file}.optimized" 2>/dev/null || true
+                  if [ -f "${qcow_file}.optimized" ]; then
+                    mv "${qcow_file}.optimized" "$qcow_file"
+                  fi
+                fi
+              done
+              
+              echo "Dynamic pool cleanup completed"
+            volumeMounts:
+            - name: k8s-storage-pool
+              mountPath: /k8s-storage-pool
+            - name: vm-storage-pool
+              mountPath: /vm-storage-pool
+          volumes:
+          - name: k8s-storage-pool
+            hostPath:
+              path: /
+          - name: vm-storage-pool
+            hostPath:
+              path: /
+          restartPolicy: OnFailure
+---
+# VM Pool API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm-pool-api
+  namespace: dynamic-storage-pools
+spec:
+  selector:
+    app: vm-pool-storage-manager
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
