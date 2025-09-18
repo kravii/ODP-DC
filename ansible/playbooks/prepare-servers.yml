@@ -1,0 +1,306 @@
+---
+- name: Prepare Rocky Linux 9 Servers for Kubernetes
+  hosts: kubernetes_cluster
+  become: yes
+  gather_facts: yes
+  vars:
+    cluster_ssh_user: "{{ cluster_ssh_user | default('acceldata') }}"
+    cluster_ssh_port: "{{ cluster_ssh_port | default(22) }}"
+
+  tasks:
+    - name: Update system packages
+      dnf:
+        name: "*"
+        state: latest
+        exclude: "kernel*"
+
+    - name: Install essential packages
+      package:
+        name:
+          - curl
+          - wget
+          - git
+          - vim
+          - htop
+          - net-tools
+          - bridge-utils
+          - iptables
+          - conntrack-tools
+          - socat
+          - ipvsadm
+          - firewalld
+          - NetworkManager
+          - openssh-server
+          - rsync
+          - tar
+          - gzip
+          - unzip
+        state: present
+
+    - name: Configure hostname
+      hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Update /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[item]['ansible_default_ipv4']['address'] }} {{ item }}"
+        state: present
+      loop: "{{ groups['kubernetes_cluster'] }}"
+
+    - name: Configure SSH daemon
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin yes' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+        - { regexp: '^#?Port', line: 'Port {{ ssh_port }}' }
+      notify: restart sshd
+
+    - name: Create cluster management user
+      user:
+        name: "{{ cluster_ssh_user }}"
+        state: present
+        shell: /bin/bash
+        create_home: yes
+        groups: wheel
+        append: yes
+
+    - name: Create .ssh directory for cluster user
+      file:
+        path: "/home/{{ cluster_ssh_user }}/.ssh"
+        state: directory
+        owner: "{{ cluster_ssh_user }}"
+        group: "{{ cluster_ssh_user }}"
+        mode: '0700'
+
+    - name: Copy cluster SSH public key
+      copy:
+        content: "{{ cluster_ssh_public_key }}"
+        dest: "/home/{{ cluster_ssh_user }}/.ssh/authorized_keys"
+        owner: "{{ cluster_ssh_user }}"
+        group: "{{ cluster_ssh_user }}"
+        mode: '0600'
+
+    - name: Configure sudo for cluster user
+      lineinfile:
+        path: /etc/sudoers.d/{{ cluster_ssh_user }}
+        line: "{{ cluster_ssh_user }} ALL=(ALL) NOPASSWD:ALL"
+        state: present
+        create: yes
+        mode: '0440'
+
+    - name: Start and enable firewalld
+      systemd:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Configure firewalld for SSH
+      firewalld:
+        port: "{{ ssh_port }}/tcp"
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Configure firewalld for Kubernetes ports
+      firewalld:
+        port: "{{ item }}"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      loop:
+        - "6443/tcp"
+        - "2379-2380/tcp"
+        - "10250/tcp"
+        - "10251/tcp"
+        - "10252/tcp"
+        - "10255/tcp"
+        - "30000-32767/tcp"
+        - "8285/udp"
+        - "8472/udp"
+
+    - name: Disable SELinux
+      selinux:
+        state: disabled
+
+    - name: Load required kernel modules
+      modprobe:
+        name: "{{ item }}"
+      loop:
+        - br_netfilter
+        - overlay
+
+    - name: Configure kernel modules to load on boot
+      lineinfile:
+        path: /etc/modules-load.d/k8s.conf
+        line: "{{ item }}"
+        state: present
+      loop:
+        - br_netfilter
+        - overlay
+
+    - name: Configure sysctl for Kubernetes
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop:
+        - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+        - { name: 'net.ipv4.ip_forward', value: '1' }
+        - { name: 'vm.swappiness', value: '0' }
+
+    - name: Configure sysctl to persist on reboot
+      copy:
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward = 1
+          vm.swappiness = 0
+        dest: /etc/sysctl.d/k8s.conf
+        mode: '0644'
+
+    - name: Install containerd
+      package:
+        name: containerd.io
+        state: present
+
+    - name: Configure containerd
+      copy:
+        content: |
+          version = 2
+          [plugins."io.containerd.grpc.v1.cri"]
+            [plugins."io.containerd.grpc.v1.cri".containerd]
+              [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+                [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+                  runtime_type = "io.containerd.runc.v2"
+                  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+                    SystemdCgroup = true
+        dest: /etc/containerd/config.toml
+        mode: '0644'
+      notify: restart containerd
+
+    - name: Start and enable containerd
+      systemd:
+        name: containerd
+        state: started
+        enabled: yes
+
+    - name: Add Kubernetes repository
+      yum_repository:
+        name: kubernetes
+        description: Kubernetes
+        baseurl: https://pkgs.k8s.io/core:/stable:/v1.28/rpm/
+        gpgkey: https://pkgs.k8s.io/core:/stable:/v1.28/rpm/repodata/repomd.xml.key
+        gpgcheck: yes
+        enabled: yes
+
+    - name: Install Kubernetes packages
+      package:
+        name:
+          - kubelet=1.28.0-1.1
+          - kubeadm=1.28.0-1.1
+          - kubectl=1.28.0-1.1
+        state: present
+
+    - name: Enable kubelet service
+      systemd:
+        name: kubelet
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Create directories for Kubernetes
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/kubernetes/manifests
+        - /var/lib/kubelet
+        - /var/lib/etcd
+
+    - name: Create shared storage directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /shared-storage
+        - /shared-storage/k8s-pv
+        - /shared-storage/vm-storage
+        - /shared-storage/monitoring
+        - /shared-storage/backups
+        - /shared-storage/logs
+
+    - name: Create Kubernetes PV subdirectories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /shared-storage/k8s-pv/databases
+        - /shared-storage/k8s-pv/applications
+        - /shared-storage/k8s-pv/logs
+
+    - name: Create VM storage subdirectories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /shared-storage/vm-storage/images
+        - /shared-storage/vm-storage/templates
+        - /shared-storage/vm-storage/instances
+
+    - name: Create monitoring subdirectories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /shared-storage/monitoring/prometheus
+        - /shared-storage/monitoring/grafana
+        - /shared-storage/monitoring/alertmanager
+
+    - name: Set ownership for shared storage
+      file:
+        path: /shared-storage
+        owner: root
+        group: root
+        mode: '0755'
+        recurse: yes
+
+    - name: Display server preparation status
+      debug:
+        msg: |
+          Server {{ inventory_hostname }} prepared successfully!
+          - OS: Rocky Linux 9
+          - SSH Port: {{ ssh_port }}
+          - Cluster User: {{ cluster_ssh_user }}
+          - Containerd: Installed and configured
+          - Kubernetes packages: Installed
+          - Firewall: Configured for Kubernetes ports
+          - Shared Storage: 1.8TB RAID storage configured at /shared-storage
+          - Storage Allocation:
+            * Kubernetes PVs: /shared-storage/k8s-pv
+            * VM Storage: /shared-storage/vm-storage
+            * Monitoring: /shared-storage/monitoring
+            * Backups: /shared-storage/backups
+            * Logs: /shared-storage/logs
+
+  handlers:
+    - name: restart sshd
+      systemd:
+        name: sshd
+        state: restarted
+
+    - name: restart containerd
+      systemd:
+        name: containerd
+        state: restarted

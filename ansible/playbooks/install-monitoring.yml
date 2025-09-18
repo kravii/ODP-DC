@@ -1,0 +1,221 @@
+---
+- name: Install Monitoring Stack on Kubernetes Cluster
+  hosts: control_plane[0]
+  become: yes
+  vars:
+    prometheus_namespace: "monitoring"
+    grafana_namespace: "monitoring"
+    prometheus_retention: "30d"
+    grafana_admin_user: "admin"
+    grafana_admin_password: "admin123"
+
+  tasks:
+    - name: Create monitoring namespace
+      kubernetes.core.k8s:
+        name: "{{ prometheus_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Install Prometheus using Helm
+      kubernetes.core.helm:
+        name: prometheus
+        chart_ref: prometheus-community/kube-prometheus-stack
+        release_namespace: "{{ prometheus_namespace }}"
+        create_namespace: yes
+        values:
+          prometheus:
+            prometheusSpec:
+              retention: "{{ prometheus_retention }}"
+              storageSpec:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: local-path
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 100Gi
+          grafana:
+            adminUser: "{{ grafana_admin_user }}"
+            adminPassword: "{{ grafana_admin_password }}"
+            persistence:
+              enabled: true
+              storageClassName: local-path
+              size: 20Gi
+            service:
+              type: LoadBalancer
+              port: 80
+          alertmanager:
+            alertmanagerSpec:
+              storage:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: local-path
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 10Gi
+
+    - name: Wait for Prometheus to be ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ prometheus_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=prometheus
+      register: prometheus_pods
+      until: prometheus_pods.resources | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Wait for Grafana to be ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ prometheus_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=grafana
+      register: grafana_pods
+      until: grafana_pods.resources | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Get Grafana service information
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: "{{ prometheus_namespace }}"
+        name: prometheus-grafana
+      register: grafana_service
+
+    - name: Display Grafana access information
+      debug:
+        msg: |
+          Grafana is available at:
+          - Service: {{ grafana_service.resources[0].spec.clusterIP }}
+          - Port: {{ grafana_service.resources[0].spec.ports[0].port }}
+          - Username: {{ grafana_admin_user }}
+          - Password: {{ grafana_admin_password }}
+
+    - name: Install Node Exporter DaemonSet
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: node-exporter
+            namespace: "{{ prometheus_namespace }}"
+            labels:
+              app: node-exporter
+          spec:
+            selector:
+              matchLabels:
+                app: node-exporter
+            template:
+              metadata:
+                labels:
+                  app: node-exporter
+              spec:
+                hostNetwork: true
+                hostPID: true
+                containers:
+                - name: node-exporter
+                  image: prom/node-exporter:v1.6.1
+                  ports:
+                  - containerPort: 9100
+                    hostPort: 9100
+                    name: metrics
+                  args:
+                  - --path.procfs=/host/proc
+                  - --path.sysfs=/host/sys
+                  - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+                  volumeMounts:
+                  - name: proc
+                    mountPath: /host/proc
+                    readOnly: true
+                  - name: sys
+                    mountPath: /host/sys
+                    readOnly: true
+                volumes:
+                - name: proc
+                  hostPath:
+                    path: /proc
+                - name: sys
+                  hostPath:
+                    path: /sys
+
+    - name: Create custom monitoring dashboard
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: datacenter-dashboard
+            namespace: "{{ prometheus_namespace }}"
+            labels:
+              grafana_dashboard: "1"
+          data:
+            datacenter-overview.json: |
+              {
+                "dashboard": {
+                  "id": null,
+                  "title": "Datacenter Overview",
+                  "tags": ["datacenter", "baremetal"],
+                  "timezone": "browser",
+                  "panels": [
+                    {
+                      "id": 1,
+                      "title": "Node CPU Usage",
+                      "type": "graph",
+                      "targets": [
+                        {
+                          "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+                          "legendFormat": "{{instance}}"
+                        }
+                      ]
+                    },
+                    {
+                      "id": 2,
+                      "title": "Node Memory Usage",
+                      "type": "graph",
+                      "targets": [
+                        {
+                          "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+                          "legendFormat": "{{instance}}"
+                        }
+                      ]
+                    },
+                    {
+                      "id": 3,
+                      "title": "Disk Usage",
+                      "type": "graph",
+                      "targets": [
+                        {
+                          "expr": "100 - ((node_filesystem_avail_bytes * 100) / node_filesystem_size_bytes)",
+                          "legendFormat": "{{instance}} - {{mountpoint}}"
+                        }
+                      ]
+                    }
+                  ],
+                  "time": {
+                    "from": "now-1h",
+                    "to": "now"
+                  },
+                  "refresh": "30s"
+                }
+              }
+
+    - name: Display monitoring setup completion
+      debug:
+        msg: |
+          Monitoring stack installation completed!
+          
+          Access Grafana:
+          - kubectl port-forward svc/prometheus-grafana 3000:80 -n {{ prometheus_namespace }}
+          - Open http://localhost:3000
+          - Username: {{ grafana_admin_user }}
+          - Password: {{ grafana_admin_password }}
+          
+          Access Prometheus:
+          - kubectl port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090 -n {{ prometheus_namespace }}
+          - Open http://localhost:9090
